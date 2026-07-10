@@ -7,6 +7,8 @@ from app.adapters.notion import NotionAdapter
 
 logger = logging.getLogger(__name__)
 
+MAX_NOT_FOUND_RETRIES = 3
+
 
 class ApprovalWatcher:
     def __init__(self, orchestrator, interval: int = 5):
@@ -14,6 +16,7 @@ class ApprovalWatcher:
         self.interval = interval
         self.notion = NotionAdapter()
         self._running = False
+        self._not_found_counts: dict[str, int] = {}
 
     async def start(self):
         self._running = True
@@ -43,6 +46,7 @@ class ApprovalWatcher:
             for tracking in pending:
                 status = await self.notion.get_approval_status(tracking.approval_id)
                 if status and status != tracking.last_known_status:
+                    self._not_found_counts.pop(tracking.approval_id, None)
                     tracking.last_known_status = status
                     session.add(tracking)
                     await session.commit()
@@ -57,3 +61,17 @@ class ApprovalWatcher:
                         tracking.processed = True
                         session.add(tracking)
                         await session.commit()
+                elif status is None:
+                    count = self._not_found_counts.get(tracking.approval_id, 0) + 1
+                    self._not_found_counts[tracking.approval_id] = count
+                    if count >= MAX_NOT_FOUND_RETRIES:
+                        logger.warning(
+                            f"Approval {tracking.approval_id[:8]} not found in Notion "
+                            f"after {count} attempts. Marking as processed to stop polling. "
+                            f"The Notion approval page may not have been created."
+                        )
+                        tracking.last_known_status = "NOTION_NOT_FOUND"
+                        tracking.processed = True
+                        session.add(tracking)
+                        await session.commit()
+                        self._not_found_counts.pop(tracking.approval_id, None)

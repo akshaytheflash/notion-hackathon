@@ -134,6 +134,69 @@ async def list_approvals():
         ) for a in approvals]
 
 
+DECISION_EVENT_TYPES = {
+    "ENGINEERING_ANALYSIS_COMPLETED",
+    "FINANCE_DECISION_CREATED",
+    "ENGINEERING_APPEAL_CREATED",
+    "OPERATIONS_REVIEW_COMPLETED",
+}
+
+
+@router.get("/api/decisions")
+async def list_decisions():
+    async with async_session() as session:
+        result = await session.execute(
+            select(WorkflowEvent)
+            .where(WorkflowEvent.event_type.in_(DECISION_EVENT_TYPES))
+            .order_by(WorkflowEvent.created_at.desc())
+        )
+        events = result.scalars().all()
+        return [WorkflowEventResponse(
+            id=e.id,
+            workflow_id=e.workflow_id,
+            event_type=e.event_type,
+            source=e.source,
+            payload_json=json.loads(e.payload_json or "{}"),
+            created_at=e.created_at,
+        ) for e in events]
+
+
+@router.get("/api/policies")
+async def list_policies():
+    async with async_session() as session:
+        result = await session.execute(
+            select(WorkflowEvent)
+            .where(WorkflowEvent.event_type == "POLICY_EVALUATED")
+            .order_by(WorkflowEvent.created_at.desc())
+        )
+        events = result.scalars().all()
+        return [WorkflowEventResponse(
+            id=e.id,
+            workflow_id=e.workflow_id,
+            event_type=e.event_type,
+            source=e.source,
+            payload_json=json.loads(e.payload_json or "{}"),
+            created_at=e.created_at,
+        ) for e in events]
+
+
+@router.get("/api/action-log")
+async def list_action_log():
+    async with async_session() as session:
+        result = await session.execute(
+            select(WorkflowEvent).order_by(WorkflowEvent.created_at.desc())
+        )
+        events = result.scalars().all()
+        return [WorkflowEventResponse(
+            id=e.id,
+            workflow_id=e.workflow_id,
+            event_type=e.event_type,
+            source=e.source,
+            payload_json=json.loads(e.payload_json or "{}"),
+            created_at=e.created_at,
+        ) for e in events]
+
+
 @router.post("/api/demo/seed")
 async def demo_seed():
     return {"status": "ok", "message": "Schema configured in Notion"}
@@ -170,3 +233,8 @@ async def workflow_ws(websocket: WebSocket, workflow_id: str):
             await websocket.receive_text()
     except WebSocketDisconnect:
         pass
+    finally:
+        # Without this, every socket that ever connects stays registered forever,
+        # leaking listeners (and re-sending to dead sockets) for the life of the process.
+        if send_event in orchestrator._event_listeners:
+            orchestrator._event_listeners.remove(send_event)

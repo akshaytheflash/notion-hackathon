@@ -224,18 +224,74 @@ class Orchestrator:
                                 {"approval_id": approval_id, "amount": amount})
         await self._emit_event("WORKFLOW_PAUSED", workflow.id, "orchestrator", {})
 
-        await self.notion.create_approval(approval_id, workflow.id, context.get("incident_id", ""),
-                                            eng.agent, amount,
-                                            f"Requested: ₹{amount:,.0f}\n"
-                                            f"Revenue Risk: ₹{context.get('revenue_risk_per_day', 0):,.0f}/day\n"
-                                            f"Engineering: {eng.reasoning_summary}\n"
-                                            f"Finance: {fin.reasoning_summary}")
+        notion_result = await self.notion.create_approval(
+            approval_id, workflow.id, context.get("incident_id", ""),
+            eng.agent, amount,
+            f"Requested: ₹{amount:,.0f}\n"
+            f"Revenue Risk: ₹{context.get('revenue_risk_per_day', 0):,.0f}/day\n"
+            f"Engineering: {eng.reasoning_summary}\n"
+            f"Finance: {fin.reasoning_summary}",
+        )
+        if notion_result is None:
+            logger.warning(
+                f"Notion approval page creation failed for approval {approval_id[:8]} "
+                f"(workflow {workflow.id[:8]}). The approval watcher will not be able to "
+                f"resolve this approval automatically. Manual intervention required."
+            )
+        else:
+            logger.info(
+                f"Notion approval page created for approval {approval_id[:8]}: "
+                f"{notion_result.get('id', 'unknown')}"
+            )
         await self.slack.send_notification(
             f"⏸️ Workflow Paused - Human Approval Required\n"
             f"Workflow: {workflow.id[:8]}\n"
             f"Amount: ₹{amount:,.0f}\n"
             f"Revenue Risk: ₹{context.get('revenue_risk_per_day', 0):,.0f}/day"
         )
+
+    async def _run_idempotent_action(self, session: AsyncSession, workflow_id: str, action_type: str,
+                                       idempotency_key: str, coro_factory) -> dict | None:
+        """Runs an external side-effect (GitHub issue, etc.) at most once per idempotency_key.
+
+        If an IntegrationAction row already recorded a SUCCESS for this key, the cached
+        external_reference is returned without re-invoking the side effect. This protects
+        against duplicate GitHub issues / Slack posts if a workflow step is retried or
+        replayed (e.g. approval_watcher firing twice, or a crash-and-resume).
+        """
+        existing = await session.execute(
+            select(IntegrationAction).where(IntegrationAction.idempotency_key == idempotency_key)
+        )
+        action = existing.scalar_one_or_none()
+        if action and action.status == "SUCCESS":
+            logger.info(f"Idempotent hit for '{idempotency_key}', reusing prior result")
+            return json.loads(action.external_reference) if action.external_reference else None
+
+        if action is None:
+            action = IntegrationAction(
+                workflow_id=workflow_id,
+                action_type=action_type,
+                idempotency_key=idempotency_key,
+                status="PENDING",
+            )
+            session.add(action)
+            await session.commit()
+            await session.refresh(action)
+
+        result = None
+        try:
+            result = await coro_factory()
+            action.status = "SUCCESS" if result is not None else "FAILED"
+            action.external_reference = json.dumps(result, default=str) if result is not None else None
+            action.error = None if result is not None else "adapter returned no result"
+        except Exception as e:
+            action.status = "FAILED"
+            action.error = str(e)
+            logger.error(f"Idempotent action '{idempotency_key}' raised: {e}")
+
+        session.add(action)
+        await session.commit()
+        return result
 
     async def _execute_approved(self, workflow: Workflow, context: dict) -> dict:
         async with async_session() as session:
@@ -250,13 +306,19 @@ class Orchestrator:
                 f"Revenue Risk Per Day: ₹{context.get('revenue_risk_per_day', 0):,.0f}\n"
                 f"Description: {context.get('description', '')}\n"
             )
-            issue = await self.github.create_issue(
-                f"github:create_issue:{workflow.id}",
-                "[P0] Emergency infrastructure scaling approved",
-                issue_body,
+            idempotency_key = f"github:create_issue:{workflow.id}"
+            issue = await self._run_idempotent_action(
+                session, workflow.id, "github_create_issue", idempotency_key,
+                lambda: self.github.create_issue(
+                    idempotency_key,
+                    "[P0] Emergency infrastructure scaling approved",
+                    issue_body,
+                ),
             )
 
             await self._emit_event("GITHUB_ISSUE_CREATED", workflow.id, "github", issue or {"error": "failed"})
+
+            await self._transition(session, workflow, "OPERATIONS_REVIEW")
 
             ops_output = await self.operations.think(context, workflow.state, github_result=issue)
             await self._emit_event("OPERATIONS_REVIEW_COMPLETED", workflow.id, "operations",

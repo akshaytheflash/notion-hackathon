@@ -43,7 +43,9 @@ class NotionAdapter:
                 if r.status_code in (200, 201):
                     return r.json()
                 if r.status_code in (400, 401, 403, 404):
-                    logger.error(f"Notion permanent error {r.status_code}: {r.text[:200]}")
+                    logger.error(
+                        f"Notion permanent error {r.status_code} on {method} {path}: {r.text[:500]}"
+                    )
                     return None
                 if r.status_code >= 500:
                     last_error = f"{r.status_code}: {r.text[:200]}"
@@ -83,7 +85,11 @@ class NotionAdapter:
         return {"status": "no_datasource_configured"}
 
     async def _create_page(self, data_source_id: str, properties: dict) -> dict | None:
-        body = {"parent": {"type": "data_source", "data_source_id": data_source_id}, "properties": properties}
+        # Per Notion API 2025-09-03+, page creation under a data source uses
+        # {"data_source_id": "..."} as the parent -- no "type" key, and
+        # critically NOT {"type": "data_source", ...} (invalid type string,
+        # this was the cause of the 400 we were seeing).
+        body = {"parent": {"data_source_id": data_source_id}, "properties": properties}
         return await self._request("POST", "/pages", json=body)
 
     async def create_incident(self, incident_id: str, name: str, severity: str, description: str, revenue_risk: float, workflow_id: str) -> dict | None:
@@ -131,7 +137,11 @@ class NotionAdapter:
         })
 
     async def create_approval(self, approval_id: str, workflow_id: str, incident_id: str, requested_by: str, amount: float, reason: str) -> dict | None:
-        return await self._create_page(settings.notion_approvals_data_source_id, {
+        logger.info(
+            f"Notion create_approval: approval_id={approval_id}, "
+            f"workflow_id={workflow_id}, data_source={settings.notion_approvals_data_source_id}"
+        )
+        result = await self._create_page(settings.notion_approvals_data_source_id, {
             "Name": {"title": [{"text": {"content": f"Approval {approval_id[:8]}"}}]},
             "Approval ID": {"rich_text": [{"text": {"content": approval_id}}]},
             "Workflow ID": {"rich_text": [{"text": {"content": workflow_id}}]},
@@ -142,21 +152,34 @@ class NotionAdapter:
             "Status": {"select": {"name": "PENDING"}},
             "Created At": {"date": {"start": __import__("datetime").datetime.now().isoformat()}},
         })
+        if result:
+            logger.info(f"Notion create_approval: page created, id={result.get('id')}")
+        else:
+            logger.warning(f"Notion create_approval: FAILED for approval_id={approval_id}")
+        return result
 
     async def get_approval_status(self, approval_id: str) -> str | None:
         ds_id = settings.notion_approvals_data_source_id
         result = await self._request("POST", f"/data_sources/{ds_id}/query")
         if not result:
+            logger.warning(f"get_approval_status: query returned empty for approval_id={approval_id}")
             return None
         for row in result.get("results", []):
             props = row.get("properties", {})
-            for prop in props.values():
-                if isinstance(prop, dict) and prop.get("rich_text"):
-                    texts = prop["rich_text"]
-                    if texts and texts[0].get("text", {}).get("content", "") == approval_id:
-                        status_prop = props.get("Status", {})
-                        if status_prop.get("type") == "select":
-                            return status_prop["select"]["name"]
+            approval_id_prop = props.get("Approval ID", {})
+            if approval_id_prop.get("type") != "rich_text":
+                continue
+            texts = approval_id_prop.get("rich_text", [])
+            if texts and texts[0].get("text", {}).get("content", "") == approval_id:
+                status_prop = props.get("Status", {})
+                if status_prop.get("type") == "select":
+                    status_val = status_prop["select"]["name"]
+                    logger.info(f"get_approval_status: found approval_id={approval_id}, status={status_val}")
+                    return status_val
+        logger.info(
+            f"get_approval_status: approval_id={approval_id} not found in "
+            f"{len(result.get('results', []))} rows"
+        )
         return None
 
     async def record_action(self, action_id: str, workflow_id: str, incident_id: str, agent: str, action: str, tool: str, execution_mode: str, result: str) -> dict | None:
