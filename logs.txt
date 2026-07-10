@@ -1,0 +1,72 @@
+Event Timeline
+8 events recorded
+
+INCIDENT_CREATED
+system
+{
+  "name": "Critical Database Corruption - User Data Store",
+  "severity": "P0",
+  "description": "Primary user database cluster experienced unrecoverable corruption. 2M+ users affected. Emergency restoration from offsite backup required with new cluster spin-up.",
+  "revenue_risk_per_day": 500000,
+  "incident_id": "cae5e689-539f-4482-b058-9ad378161021"
+}
+2:40:27 PM
+STATE_ENGINEERING_ANALYSIS
+orchestrator
+{
+  "from": "CREATED",
+  "to": "ENGINEERING_ANALYSIS"
+}
+2:40:27 PM
+ENGINEERING_ANALYSIS_COMPLETED
+engineering
+{
+  "agent": "EngineeringAgent",
+  "department": "Engineering",
+  "decision": "Initiate immediate P0 incident response and resource allocation for critical user data store recovery.",
+  "reasoning_summary": "Primary user database cluster suffered unrecoverable corruption, leading to a P0 incident impacting over 2 million users. Emergency restoration from offsite backup and a new cluster spin-up are critically required to mitigate ongoing service disruption and prevent significant financial loss.",
+  "evidence": "Technical: Primary user database cluster experienced unrecoverable corruption, necessitating emergency restoration and new cluster spin-up. Business: 2M+ users affected, resulting in a revenue risk of $500,000.00 per day. Incident ID: cae5e689-539f-4482-b058-9ad378161021.",
+  "requested_action": "Allocate necessary cloud infrastructure resources (compute, storage, network) for immediate new database cluster spin-up and data restoration operations. Engage on-call database engineers and infrastructure teams.",
+  "confidence": 0.98,
+  "requires_escalation": true,
+  "message_to_department": "This is a critical P0 incident requiring immediate attention and full resource allocation. Engage all relevant teams (DBA, Infra, SRE) to expedite recovery. Provide regular status updates."
+}
+2:40:35 PM
+STATE_RESOURCE_REQUESTED
+orchestrator
+{
+  "from": "ENGINEERING_ANALYSIS",
+  "to": "RESOURCE_REQUESTED"
+}
+2:40:36 PM
+RESOURCE_REQUEST_CREATED
+engineering
+{
+  "amount": 80000
+}
+2:40:36 PM
+STATE_FINANCE_REVIEW
+orchestrator
+{
+  "from": "RESOURCE_REQUESTED",
+  "to": "FINANCE_REVIEW"
+}
+2:40:36 PM
+POLICY_EVALUATED
+policy_engine
+{
+  "policy_id": "POLICY-ENG-SPEND-001",
+  "policy_name": "Spending Limit (POLICY-ENG-SPEND-001)",
+  "passed": false,
+  "requested_amount": 80000,
+  "limit": 50000,
+  "violation": "Requested amount 80000.0 exceeds autonomous spending authority 50000",
+  "required_action": "HUMAN_APPROVAL_REQUIRED"
+}
+2:40:37 PM
+STATE_FAILED
+orchestrator
+{
+  "from": "FINANCE_REVIEW",
+  "to": "FAILED"
+}
