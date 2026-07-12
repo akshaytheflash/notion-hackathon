@@ -1,0 +1,4 @@
+INFO:     127.0.0.1:40832 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:8288 - "POST /api/demo/run-primary-scenario HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:21739 - "POST /api/admin/clear-database HTTP/1.1" 200 OK
+INFO:     127.0.0.1:27547 - "POST /api/demo/run-primary-scenario HTTP/1.1" 500 Internal Server Error

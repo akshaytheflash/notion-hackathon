@@ -144,7 +144,7 @@ class Orchestrator:
 
             await self._transition(session, workflow, "RESOURCE_REQUESTED")
             await asyncio.sleep(10)
-            requested_amount = 80000.0
+            requested_amount = eng_output.requested_amount if eng_output.requested_amount > 0 else 80000.0
             context["requested_amount"] = requested_amount
             workflow.context_json = json.dumps(context, default=str)
             session.add(workflow)
@@ -209,7 +209,7 @@ class Orchestrator:
                     return {"workflow_id": workflow_id, "status": "REJECTED"}
             else:
                 await self._transition(session, workflow, "APPROVED")
-                return await self._execute_approved(workflow, context)
+                return await self._execute_approved(workflow.id, context)
         return {"workflow_id": workflow_id, "status": "UNKNOWN"}
 
     async def _create_approval(self, session: AsyncSession, workflow: Workflow, context: dict, amount: float,
@@ -299,8 +299,11 @@ class Orchestrator:
         await session.commit()
         return result
 
-    async def _execute_approved(self, workflow: Workflow, context: dict) -> dict:
+    async def _execute_approved(self, workflow_id: str, context: dict) -> dict:
         async with async_session() as session:
+            workflow = await session.get(Workflow, workflow_id)
+            if not workflow:
+                return {"error": "workflow not found for execution"}
             await self._transition(session, workflow, "EXECUTING")
             await self.slack.send_notification(f"✅ Workflow {workflow.id[:8]} approved. Executing...")
 
@@ -346,7 +349,7 @@ class Orchestrator:
             context = json.loads(workflow.context_json or "{}")
             await self._emit_event("APPROVAL_APPROVED", workflow_id, "approval_watcher", {})
             await self._transition(session, workflow, "APPROVED")
-        return await self._execute_approved(workflow, context)
+        return await self._execute_approved(workflow_id, context)
 
     async def resume_rejected_workflow(self, workflow_id: str) -> dict:
         async with async_session() as session:

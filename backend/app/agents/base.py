@@ -18,6 +18,7 @@ OUTPUT_SCHEMA = {
         "confidence": {"type": "number"},
         "requires_escalation": {"type": "boolean"},
         "message_to_department": {"type": "string"},
+        "requested_amount": {"type": "number"},
     },
     "required": [
         "agent", "department", "decision", "reasoning_summary",
@@ -57,6 +58,12 @@ class BaseAgent:
             ctx += "\nThe finance department has rejected your resource request because it exceeds policy limits. Provide a strong cost-benefit justification for why this exception should be approved despite exceeding the standard limit.\n"
         elif workflow_state == "ENGINEERING_ANALYSIS":
             ctx += "\nAssess the incident and determine what resources are needed. You will need to request resources to address this incident.\n"
+            ctx += "Set requested_amount to the actual dollar cost needed to resolve this incident. Be realistic:\n"
+            ctx += "- For critical P0 outages requiring infrastructure scaling or emergency vendor contracts: $60,000-$120,000\n"
+            ctx += "- For P1 incidents requiring moderate engineering effort or third-party tools: $20,000-$60,000\n"
+            ctx += "- For P2 issues fixable with config changes, hotfixes, or minor infra adjustments: $5,000-$30,000\n"
+            ctx += "- For P3/P4 low-severity issues: $1,000-$10,000\n"
+            ctx += "The autonomous spending limit is $50,000. If your request exceeds this, Finance will reject it and require human approval.\n"
 
         return ctx
 
@@ -76,6 +83,7 @@ class BaseAgent:
                 confidence=result.get("confidence", 0.0),
                 requires_escalation=result.get("requires_escalation", False),
                 message_to_department=result.get("message_to_department"),
+                requested_amount=result.get("requested_amount", 0.0),
             )
         logger.error(f"Gemini returned no result for {self.name} in state {workflow_state}. No fallback available.")
         return None

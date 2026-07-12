@@ -16,7 +16,6 @@ export function Layout() {
   const [integrations, setIntegrations] = useState<IntegrationsStatus | null>(null);
   const [running, setRunning] = useState(false);
   const [demoError, setDemoError] = useState<string | null>(null);
-
   const refresh = useCallback(async () => {
     try {
       const st = await api.integrationsStatus();

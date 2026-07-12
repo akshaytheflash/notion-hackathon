@@ -58,6 +58,7 @@ class AgentOutput(BaseModel):
     confidence: float
     requires_escalation: bool
     message_to_department: str | None = None
+    requested_amount: float = 0.0
 
 
 class PolicyResult(BaseModel):

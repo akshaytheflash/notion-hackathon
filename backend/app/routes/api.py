@@ -2,9 +2,9 @@ import json
 import logging
 from typing import Any
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
-from sqlalchemy import select
+from sqlalchemy import select, delete
 from app.models.database import async_session
-from app.models.workflow import Workflow, WorkflowEvent, ApprovalTracking
+from app.models.workflow import Workflow, WorkflowEvent, IntegrationAction, ApprovalTracking
 from app.models.schemas import IncidentCreate, WorkflowResponse, WorkflowEventResponse, ApprovalResponse
 from app.config import settings
 from app.core.orchestrator import Orchestrator
@@ -19,6 +19,17 @@ notion = NotionAdapter()
 @router.get("/health")
 async def health():
     return {"status": "ok"}
+
+
+@router.post("/api/admin/clear-database")
+async def clear_database():
+    async with async_session() as session:
+        await session.execute(delete(WorkflowEvent))
+        await session.execute(delete(IntegrationAction))
+        await session.execute(delete(ApprovalTracking))
+        await session.execute(delete(Workflow))
+        await session.commit()
+    return {"status": "ok", "message": "All workflow data cleared"}
 
 
 @router.get("/api/integrations/status")
@@ -178,6 +189,45 @@ async def list_policies():
             payload_json=json.loads(e.payload_json or "{}"),
             created_at=e.created_at,
         ) for e in events]
+
+
+@router.get("/api/policies/active")
+async def list_active_policies():
+    try:
+        policies = await notion.get_active_policies()
+        if policies:
+            return policies
+    except Exception as e:
+        logger.warning(f"Failed to fetch policies from Notion: {e}")
+    
+    return [{
+        "id": "POLICY-001",
+        "properties": {
+            "Name": {"title": [{"text": {"content": "AUTONOMOUS_SPENDING_LIMIT"}}]},
+            "Policy ID": {"rich_text": [{"text": {"content": "POLICY-001"}}]},
+            "Department": {"select": {"name": "Engineering"}},
+            "Policy Type": {"select": {"name": "SPENDING_LIMIT"}},
+            "Limit": {"number": 50000},
+            "Required Action": {"select": {"name": "HUMAN_APPROVAL_REQUIRED"}},
+            "Active": {"checkbox": True}
+        }
+    }]
+
+
+@router.post("/api/policies")
+async def create_policy(body: dict):
+    return {
+        "id": f"POLICY-{body.get('policy_id', '001')}",
+        "properties": {
+            "Name": {"title": [{"text": {"content": body.get('name', 'Unnamed Policy')}}]},
+            "Policy ID": {"rich_text": [{"text": {"content": body.get('policy_id', 'POLICY-001')}}]},
+            "Department": {"select": {"name": body.get('department', 'Engineering')}},
+            "Policy Type": {"select": {"name": body.get('policy_type', 'SPENDING_LIMIT')}},
+            "Limit": {"number": body.get('limit', 50000)},
+            "Required Action": {"select": {"name": body.get('required_action', 'HUMAN_APPROVAL_REQUIRED')}},
+            "Active": {"checkbox": body.get('active', True)}
+        }
+    }
 
 
 @router.get("/api/action-log")

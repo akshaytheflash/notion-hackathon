@@ -67,6 +67,19 @@ export interface IncidentDetail {
   created_at: string;
 }
 
+export interface Policy {
+  id: string;
+  properties: {
+    Name?: { title: Array<{ text: { content: string } }> };
+    "Policy ID"?: { rich_text: Array<{ text: { content: string } }> };
+    Department?: { select: { name: string } };
+    "Policy Type"?: { select: { name: string } };
+    Limit?: { number: number };
+    "Required Action"?: { select: { name: string } };
+    Active?: { checkbox: boolean };
+  };
+}
+
 export const api = {
   health: () => req<{ status: string }>("/health"),
   integrationsStatus: () => req<IntegrationsStatus>("/api/integrations/status"),
@@ -85,4 +98,17 @@ export const api = {
       "/api/demo/run-primary-scenario",
       { method: "POST", body: body ? JSON.stringify(body) : undefined }
     ),
+  clearDatabase: () =>
+    req<{ status: string; message: string }>("/api/admin/clear-database", { method: "POST" }),
+  listActivePolicies: () => req<Policy[]>("/api/policies/active"),
+  createPolicy: (body: {
+    policy_id: string;
+    name: string;
+    department: string;
+    policy_type: string;
+    limit: number;
+    required_action: string;
+    active: boolean;
+  }) =>
+    req<Policy>("/api/policies", { method: "POST", body: JSON.stringify(body) }),
 };

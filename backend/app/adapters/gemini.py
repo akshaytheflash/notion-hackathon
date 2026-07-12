@@ -30,7 +30,10 @@ class GeminiAdapter:
         }
 
         if output_schema:
-            body["generationConfig"] = {"response_mime_type": "application/json"}
+            body["generationConfig"] = {
+                "response_mime_type": "application/json",
+                "response_schema": output_schema,
+            }
 
         max_retries = 5
         last_error = None
