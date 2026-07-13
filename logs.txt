@@ -1,1 +1,0 @@
-{"error":"Frontend not built. Run: cd frontend && npm install && npm run build"}
