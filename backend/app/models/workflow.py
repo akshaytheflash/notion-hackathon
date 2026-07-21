@@ -61,3 +61,17 @@ class ApprovalTracking(Base):
     processed: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
+
+
+class StoredPolicy(Base):
+    __tablename__ = "stored_policies"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    policy_id: Mapped[str] = mapped_column(String(50), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(200))
+    department: Mapped[str] = mapped_column(String(50), default="Engineering")
+    policy_type: Mapped[str] = mapped_column(String(50), default="SPENDING_LIMIT")
+    limit: Mapped[float] = mapped_column(Float, default=50000.0)
+    required_action: Mapped[str] = mapped_column(String(100), default="HUMAN_APPROVAL_REQUIRED")
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)

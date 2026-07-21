@@ -16,6 +16,6 @@ async def get_db():
 
 
 async def init_db():
-    from app.models.workflow import Workflow, WorkflowEvent, IntegrationAction, ApprovalTracking
+    from app.models.workflow import Workflow, WorkflowEvent, IntegrationAction, ApprovalTracking, StoredPolicy
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)

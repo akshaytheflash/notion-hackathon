@@ -1,16 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, type WorkflowEvent } from "../lib/incident-command/api";
+import { eventColor } from "../lib/incident-command/workflow-status";
 import { SkeletonTable } from "../components/incident-command/Skeleton";
-
-function eventColor(eventType: string): string {
-  if (eventType.includes("COMPLETED")) return "var(--color-signal-green)";
-  if (eventType.includes("FAILED") || eventType.includes("REJECTED")) return "var(--color-signal-red)";
-  if (eventType.includes("APPROVAL") || eventType.includes("PAUSED")) return "var(--color-signal-amber)";
-  if (eventType.includes("STATE_")) return "var(--color-signal-cyan)";
-  if (eventType.includes("POLICY")) return "var(--color-signal-violet)";
-  return "var(--color-dim)";
-}
+import { Pagination } from "../components/incident-command/Pagination";
 
 function sourceIcon(source: string): string {
   switch (source) {
@@ -28,26 +21,32 @@ function sourceIcon(source: string): string {
 
 export default function ActionLog() {
   const [events, setEvents] = useState<WorkflowEvent[]>([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<string>("ALL");
+  const pageSize = 50;
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (signal?: AbortSignal) => {
     try {
-      const data = await api.listActionLog();
-      setEvents(data);
+      const res = await api.listActionLog(signal, page, pageSize);
+      setEvents(res.data);
+      setTotal(res.total);
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load action log");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [page]);
 
   useEffect(() => {
-    refresh();
-    const id = setInterval(refresh, 5000);
-    return () => clearInterval(id);
+    setLoading(true);
+    const ac = new AbortController();
+    refresh(ac.signal);
+    const id = setInterval(() => refresh(ac.signal), 5000);
+    return () => { clearInterval(id); ac.abort(); };
   }, [refresh]);
 
   const sources = Array.from(new Set(events.map((e) => e.source))).sort();
@@ -150,6 +149,7 @@ export default function ActionLog() {
               );
             })}
           </div>
+          <Pagination page={page} total={total} pageSize={pageSize} onPageChange={setPage} />
         </div>
       )}
     </div>

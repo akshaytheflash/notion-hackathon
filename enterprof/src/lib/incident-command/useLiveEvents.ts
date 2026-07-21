@@ -8,11 +8,11 @@ export interface LiveEvent {
 }
 
 /**
- * The backend's /ws/workflows/{id} endpoint currently broadcasts every
+ * The backend's /ws/workflows/{id} endpoint broadcasts every
  * workflow's events to every connected socket regardless of {id} — so a
  * single connection here is enough to drive a live command-center feed.
- * Note: this project has no backend wired up yet, so this will simply stay
- * in "reconnecting" state until a matching WebSocket endpoint exists.
+ * We use "live" as a placeholder workflow_id since the backend doesn't
+ * filter events by workflow_id.
  */
 export function useLiveEvents(maxEvents = 200) {
   const [events, setEvents] = useState<LiveEvent[]>([]);

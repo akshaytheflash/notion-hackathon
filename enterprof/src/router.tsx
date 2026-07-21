@@ -8,14 +8,8 @@ import WorkflowDetailPage from "./pages/WorkflowDetail";
 import Decisions from "./pages/Decisions";
 import Policies from "./pages/Policies";
 import ActionLog from "./pages/ActionLog";
-import SignIn from "./pages/SignIn";
 
 export const routers = [
-  {
-    path: "/sign-in",
-    name: "sign-in",
-    element: <SignIn />,
-  },
   {
     path: "/",
     name: "command-center",
@@ -38,11 +32,3 @@ export const routers = [
     element: <NotFound />,
   },
 ];
-
-declare global {
-  interface Window {
-    __routers__: typeof routers;
-  }
-}
-
-window.__routers__ = routers;

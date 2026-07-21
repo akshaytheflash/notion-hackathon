@@ -1,10 +1,9 @@
-import { NavLink, Outlet } from "react-router-dom";
+import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Bell,
   GitBranch,
   LayoutDashboard,
-  LogIn,
   Moon,
   Play,
   Plus,
@@ -15,9 +14,11 @@ import {
   Siren,
   SunMedium,
   Terminal,
+  X,
 } from "lucide-react";
-import { api, type IntegrationsStatus, type Workflow } from "../../lib/incident-command/api";
+import { api, type IntegrationsStatus, type Workflow, type SearchResult } from "../../lib/incident-command/api";
 import { useIccTheme } from "../../lib/incident-command/useIccTheme";
+import { useLiveEvents } from "../../lib/incident-command/useLiveEvents";
 import { IntegrationStrip } from "./IntegrationStrip";
 
 const NAV = [
@@ -33,25 +34,30 @@ const TERMINAL_STATES = new Set(["COMPLETED", "FAILED", "REJECTED"]);
 
 export function Layout() {
   const { theme, toggleTheme } = useIccTheme();
+  const navigate = useNavigate();
   const [integrations, setIntegrations] = useState<IntegrationsStatus | null>(null);
   const [workflows, setWorkflows] = useState<Workflow[]>([]);
   const [running, setRunning] = useState(false);
   const [demoError, setDemoError] = useState<string | null>(null);
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (signal?: AbortSignal) => {
     try {
-      const [st, wf] = await Promise.all([api.integrationsStatus(), api.listWorkflows()]);
+      const [st, wfRes] = await Promise.all([
+        api.integrationsStatus(),
+        api.listWorkflows(signal, 1, 100),
+      ]);
       setIntegrations(st);
-      setWorkflows(wf);
+      setWorkflows(wfRes.data);
     } catch {
       // fail quietly
     }
   }, []);
 
   useEffect(() => {
-    refresh();
-    const id = setInterval(refresh, 8000);
-    return () => clearInterval(id);
+    const ac = new AbortController();
+    refresh(ac.signal);
+    const id = setInterval(() => refresh(ac.signal), 8000);
+    return () => { clearInterval(id); ac.abort(); };
   }, [refresh]);
 
   const activeCount = workflows.filter((w) => !TERMINAL_STATES.has(w.state)).length;
@@ -102,6 +108,78 @@ export function Layout() {
     return () => document.removeEventListener("mousedown", handleClick);
   }, [showForm]);
 
+  // --- Search ---
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<SearchResult | null>(null);
+  const [searching, setSearching] = useState(false);
+  const [showSearch, setShowSearch] = useState(false);
+  const searchRef = useRef<HTMLDivElement>(null);
+  const searchTimerRef = useRef<ReturnType<typeof setTimeout>>();
+  const navigateRef = useRef(navigate);
+  navigateRef.current = navigate;
+
+  useEffect(() => {
+    function handleClick(e: MouseEvent) {
+      if (searchRef.current && !searchRef.current.contains(e.target as Node)) {
+        setShowSearch(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, []);
+
+  function handleSearchInput(value: string) {
+    setSearchQuery(value);
+    if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+    if (!value.trim()) {
+      setSearchResults(null);
+      setShowSearch(false);
+      return;
+    }
+    searchTimerRef.current = setTimeout(async () => {
+      setSearching(true);
+      try {
+        const res = await api.search(value.trim());
+        setSearchResults(res);
+        setShowSearch(true);
+      } catch {
+        // fail quietly
+      } finally {
+        setSearching(false);
+      }
+    }, 300);
+  }
+
+  function goToSearchResult(path: string) {
+    setShowSearch(false);
+    setSearchQuery("");
+    navigateRef.current(path);
+  }
+
+  const hasSearchResults = searchResults && (
+    searchResults.incidents.length + searchResults.workflows.length +
+    searchResults.decisions.length + searchResults.policies.length + searchResults.events.length
+  ) > 0;
+
+  // --- Notifications ---
+  const { events } = useLiveEvents();
+  const [showNotifications, setShowNotifications] = useState(false);
+  const notifRef = useRef<HTMLDivElement>(null);
+  const [notifDismissed, setNotifDismissed] = useState(0);
+
+  useEffect(() => {
+    function handleClick(e: MouseEvent) {
+      if (notifRef.current && !notifRef.current.contains(e.target as Node)) {
+        setShowNotifications(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, []);
+
+  const recentEvents = events.slice(0, 20);
+  const unreadCount = Math.max(0, events.length - notifDismissed);
+
   return (
     <div className="icc-root min-h-screen flex" data-theme={theme}>
       <aside
@@ -123,7 +201,7 @@ export function Layout() {
           </div>
         </div>
 
-        <div className="px-4 pt-4">
+        <div className="px-4 pt-4" ref={searchRef}>
           <div
             className="flex items-center gap-2 rounded-md px-3 py-2.5 border"
             style={{ borderColor: "var(--color-hairline)", backgroundColor: "var(--color-panel-raised)" }}
@@ -131,17 +209,65 @@ export function Layout() {
             <Search className="w-4 h-4 shrink-0" style={{ color: "var(--color-dim)" }} />
             <input
               type="text"
-              placeholder="Search incidents..."
+              value={searchQuery}
+              onChange={(e) => handleSearchInput(e.target.value)}
+              onFocus={() => searchResults && setShowSearch(true)}
+              placeholder="Search…"
               className="flex-1 bg-transparent text-sm outline-none min-w-0"
               style={{ color: "var(--color-text)" }}
+              aria-label="Search incidents, workflows, decisions, policies"
             />
-            <kbd
-              className="text-[10px] font-mono px-1.5 py-0.5 rounded shrink-0"
-              style={{ color: "var(--color-dim)", border: "1px solid var(--color-hairline)" }}
-            >
-              ⌘K
-            </kbd>
+            {searchQuery && (
+              <button onClick={() => { setSearchQuery(""); setSearchResults(null); setShowSearch(false); }} className="shrink-0" style={{ color: "var(--color-dim)" }}>
+                <X className="w-3.5 h-3.5" />
+              </button>
+            )}
           </div>
+          {showSearch && searchResults && (
+            <div className="absolute z-50 mt-1 w-72 max-h-80 overflow-y-auto rounded-lg border shadow-lg" style={{ backgroundColor: "var(--color-panel)", borderColor: "var(--color-hairline)" }}>
+              {searching && <div className="p-3 text-xs font-mono" style={{ color: "var(--color-dim)" }}>Searching…</div>}
+              {!searching && !hasSearchResults && (
+                <div className="p-3 text-xs font-mono" style={{ color: "var(--color-dim)" }}>No results found.</div>
+              )}
+              {!searching && hasSearchResults && (
+                <div className="py-1">
+                  {searchResults.incidents.map((inc) => (
+                    <button key={`inc-${inc.incident_id}`} onClick={() => goToSearchResult(`/incidents/${inc.incident_id}`)} className="w-full text-left px-3 py-2 text-xs font-mono hover:bg-white/[0.04] flex items-center gap-2" style={{ color: "var(--color-text)" }}>
+                      <Siren className="w-3 h-3 shrink-0" style={{ color: "var(--color-signal-red)" }} />
+                      <span className="truncate">Incident {inc.incident_id.slice(0, 8)}</span>
+                      <span className="ml-auto shrink-0" style={{ color: "var(--color-dim)" }}>{inc.state}</span>
+                    </button>
+                  ))}
+                  {searchResults.workflows.map((wf) => (
+                    <button key={`wf-${wf.id}`} onClick={() => goToSearchResult(`/workflows/${wf.id}`)} className="w-full text-left px-3 py-2 text-xs font-mono hover:bg-white/[0.04] flex items-center gap-2" style={{ color: "var(--color-text)" }}>
+                      <GitBranch className="w-3 h-3 shrink-0" style={{ color: "var(--color-signal-cyan)" }} />
+                      <span className="truncate">Workflow {wf.id.slice(0, 8)}</span>
+                      <span className="ml-auto shrink-0" style={{ color: "var(--color-dim)" }}>{wf.state}</span>
+                    </button>
+                  ))}
+                  {searchResults.decisions.map((d) => (
+                    <button key={`dec-${d.id}`} onClick={() => goToSearchResult(`/workflows/${d.workflow_id}`)} className="w-full text-left px-3 py-2 text-xs font-mono hover:bg-white/[0.04] flex items-center gap-2" style={{ color: "var(--color-text)" }}>
+                      <ShieldCheck className="w-3 h-3 shrink-0" style={{ color: "var(--color-signal-amber)" }} />
+                      <span className="truncate">{d.event_type}</span>
+                      <span className="ml-auto shrink-0" style={{ color: "var(--color-dim)" }}>{new Date(d.created_at).toLocaleDateString()}</span>
+                    </button>
+                  ))}
+                  {searchResults.policies.map((p) => (
+                    <button key={`pol-${p.id}`} onClick={() => goToSearchResult("/policies")} className="w-full text-left px-3 py-2 text-xs font-mono hover:bg-white/[0.04] flex items-center gap-2" style={{ color: "var(--color-text)" }}>
+                      <Scale className="w-3 h-3 shrink-0" style={{ color: "var(--color-signal-green)" }} />
+                      <span className="truncate">{p.name || p.policy_id}</span>
+                    </button>
+                  ))}
+                  {searchResults.events.slice(0, 5).map((ev) => (
+                    <button key={`ev-${ev.id}`} onClick={() => goToSearchResult(`/workflows/${ev.workflow_id}`)} className="w-full text-left px-3 py-2 text-xs font-mono hover:bg-white/[0.04] flex items-center gap-2" style={{ color: "var(--color-text)" }}>
+                      <ScrollText className="w-3 h-3 shrink-0" style={{ color: "var(--color-muted)" }} />
+                      <span className="truncate">{ev.event_type}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         <nav className="flex-1 py-4">
@@ -190,17 +316,6 @@ export function Layout() {
           </p>
           <IntegrationStrip status={integrations} />
         </div>
-
-        <div className="px-5 py-4 border-t" style={{ borderColor: "var(--color-hairline)" }}>
-          <NavLink
-            to="/sign-in"
-            className="flex items-center gap-2.5 text-sm font-medium transition-all duration-200 hover:opacity-80"
-            style={{ color: "var(--color-muted)" }}
-          >
-            <LogIn className="w-4 h-4" />
-            Sign In
-          </NavLink>
-        </div>
       </aside>
 
       <div className="flex-1 flex flex-col min-h-screen min-w-0">
@@ -248,13 +363,55 @@ export function Layout() {
               {theme === "dark" ? <SunMedium className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
             </button>
 
-            <button
-              aria-label="Notifications"
-              className="w-9 h-9 rounded-md flex items-center justify-center transition-all duration-200 hover:opacity-80"
-              style={{ color: "var(--color-muted)", border: "1px solid var(--color-hairline)" }}
-            >
-              <Bell className="w-4 h-4" />
-            </button>
+            <div className="relative" ref={notifRef}>
+              <button
+                onClick={() => { setShowNotifications(!showNotifications); if (!showNotifications) setNotifDismissed(events.length); }}
+                aria-label={`Notifications: ${unreadCount} unread`}
+                className="w-9 h-9 rounded-md flex items-center justify-center transition-all duration-200 hover:opacity-80 relative"
+                style={{ color: "var(--color-muted)", border: "1px solid var(--color-hairline)" }}
+              >
+                <Bell className="w-4 h-4" />
+                {unreadCount > 0 && (
+                  <span
+                    className="absolute -top-1 -right-1 w-3.5 h-3.5 rounded-full flex items-center justify-center text-[8px] font-mono font-bold"
+                    style={{ backgroundColor: "var(--color-signal-red)", color: "#fff" }}
+                  >
+                    {unreadCount > 9 ? "9+" : unreadCount}
+                  </span>
+                )}
+              </button>
+              {showNotifications && (
+                <div className="absolute right-0 z-50 mt-1 w-80 max-h-96 overflow-y-auto rounded-lg border shadow-lg" style={{ backgroundColor: "var(--color-panel)", borderColor: "var(--color-hairline)" }}>
+                  <div className="px-3 py-2.5 border-b flex items-center justify-between" style={{ borderColor: "var(--color-hairline)" }}>
+                    <span className="text-xs font-mono font-semibold" style={{ color: "var(--color-text)" }}>Notifications</span>
+                    {events.length > 0 && (
+                      <button onClick={() => setNotifDismissed(events.length)} className="text-[11px] font-mono" style={{ color: "var(--color-signal-cyan)" }}>Mark all read</button>
+                    )}
+                  </div>
+                  {recentEvents.length === 0 ? (
+                    <div className="p-4 text-xs font-mono" style={{ color: "var(--color-dim)" }}>No recent events.</div>
+                  ) : (
+                    recentEvents.map((ev, i) => {
+                      const isNew = i >= (events.length - notifDismissed);
+                      return (
+                        <button
+                          key={`${ev.created_at}-${i}`}
+                          onClick={() => { goToSearchResult(`/workflows/${ev.workflow_id}`); }}
+                          className="w-full text-left px-3 py-2.5 border-b flex items-start gap-2 hover:bg-white/[0.03]"
+                          style={{ borderColor: "var(--color-hairline)" }}
+                        >
+                          {isNew && <span className="w-1.5 h-1.5 rounded-full mt-1.5 shrink-0" style={{ backgroundColor: "var(--color-signal-cyan)" }} />}
+                          <div className="flex-1 min-w-0">
+                            <p className="text-xs font-mono truncate" style={{ color: isNew ? "var(--color-text)" : "var(--color-dim)" }}>{ev.event_type}</p>
+                            <p className="text-[11px] font-mono mt-0.5" style={{ color: "var(--color-dim)" }}>{ev.source}</p>
+                          </div>
+                        </button>
+                      );
+                    })
+                  )}
+                </div>
+              )}
+            </div>
 
             {showForm ? (
               <div className="flex items-end gap-2 p-2.5 rounded-lg" style={{ backgroundColor: "var(--color-panel)", border: "1px solid var(--color-hairline)" }}>
@@ -288,7 +445,7 @@ export function Layout() {
               </div>
             ) : (
               <>
-                <button onClick={() => setShowForm(true)}
+                <button onClick={() => { setShowForm(true); setDemoError(null); }}
                   className="flex items-center gap-1.5 rounded-md px-3.5 py-2.5 text-sm font-medium transition-all duration-200 hover:opacity-90"
                   style={{ color: "var(--color-muted)", border: "1px solid var(--color-hairline)" }}>
                   <Plus className="w-4 h-4" />

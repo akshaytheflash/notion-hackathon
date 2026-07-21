@@ -1,12 +1,6 @@
 import type { Workflow } from "../../lib/incident-command/api";
+import { stateColor } from "../../lib/incident-command/workflow-status";
 import { StateRail } from "./StateRail";
-
-function stateBadgeColor(state: string): string {
-  if (state === "COMPLETED") return "var(--color-signal-green)";
-  if (state === "FAILED" || state === "REJECTED") return "var(--color-signal-red)";
-  if (state === "WAITING_FOR_APPROVAL") return "var(--color-signal-amber)";
-  return "var(--color-signal-cyan)";
-}
 
 export function WorkflowList({ workflows }: { workflows: Workflow[] }) {
   return (
@@ -30,8 +24,8 @@ export function WorkflowList({ workflows }: { workflows: Workflow[] }) {
                 <span
                   className="text-[10px] font-mono px-1.5 py-0.5 rounded"
                   style={{
-                    color: stateBadgeColor(w.state),
-                    border: `1px solid ${stateBadgeColor(w.state)}`,
+                    color: stateColor(w.state),
+                    border: `1px solid ${stateColor(w.state)}`,
                   }}
                 >
                   {w.state}

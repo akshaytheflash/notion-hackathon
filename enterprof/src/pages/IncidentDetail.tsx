@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import { api, type IncidentDetail as IncidentDetailType } from "../lib/incident-command/api";
+import { stateColor } from "../lib/incident-command/workflow-status";
 import { StateRail } from "../components/incident-command/StateRail";
 import { SkeletonDetail } from "../components/incident-command/Skeleton";
 
@@ -10,10 +11,10 @@ export default function IncidentDetailPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (signal?: AbortSignal) => {
     if (!incidentId) return;
     try {
-      const data = await api.getIncident(incidentId);
+      const data = await api.getIncident(incidentId, signal);
       setIncident(data);
       setError(null);
     } catch (e) {
@@ -24,9 +25,10 @@ export default function IncidentDetailPage() {
   }, [incidentId]);
 
   useEffect(() => {
-    load();
-    const id = setInterval(load, 4000);
-    return () => clearInterval(id);
+    const ac = new AbortController();
+    load(ac.signal);
+    const id = setInterval(() => load(ac.signal), 4000);
+    return () => { clearInterval(id); ac.abort(); };
   }, [load]);
 
   if (loading) {
@@ -109,8 +111,8 @@ export default function IncidentDetailPage() {
         )}
 
         <div className="grid grid-cols-3 gap-4 mt-4">
-          <FieldCard label="Revenue Risk" value={ctx.revenue_risk_per_day != null ? `₹${ctx.revenue_risk_per_day.toLocaleString()}/day` : "—"} />
-          <FieldCard label="Requested Amount" value={ctx.requested_amount != null ? `₹${ctx.requested_amount.toLocaleString()}` : "—"} />
+          <FieldCard label="Revenue Risk" value={ctx.revenue_risk_per_day != null ? `$${ctx.revenue_risk_per_day.toLocaleString()}/day` : "—"} />
+          <FieldCard label="Requested Amount" value={ctx.requested_amount != null ? `$${ctx.requested_amount.toLocaleString()}` : "—"} />
           <FieldCard label="Created" value={new Date(incident.created_at).toLocaleString()} />
         </div>
 
@@ -148,11 +150,4 @@ function FieldCard({ label, value }: { label: string; value: string }) {
       <span className="text-sm font-mono" style={{ color: "var(--color-text)" }}>{value}</span>
     </div>
   );
-}
-
-function stateColor(state: string): string {
-  if (state === "COMPLETED") return "var(--color-signal-green)";
-  if (state === "FAILED" || state === "REJECTED") return "var(--color-signal-red)";
-  if (state === "WAITING_FOR_APPROVAL") return "var(--color-signal-amber)";
-  return "var(--color-signal-cyan)";
 }

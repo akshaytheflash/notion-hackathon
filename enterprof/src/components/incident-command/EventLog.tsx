@@ -1,14 +1,7 @@
 import { formatDistanceToNowStrict } from "date-fns";
 import { Activity, Circle } from "lucide-react";
 import type { LiveEvent } from "../../lib/incident-command/useLiveEvents";
-
-function eventColor(eventType: string): string {
-  if (eventType.startsWith("STATE_COMPLETED")) return "var(--color-signal-green)";
-  if (eventType.startsWith("STATE_FAILED") || eventType.startsWith("STATE_REJECTED")) return "var(--color-signal-red)";
-  if (eventType.includes("APPROVAL")) return "var(--color-signal-amber)";
-  if (eventType.startsWith("STATE_")) return "var(--color-signal-cyan)";
-  return "var(--color-dim)";
-}
+import { eventColor } from "../../lib/incident-command/workflow-status";
 
 export function EventLog({ events, connected }: { events: LiveEvent[]; connected: boolean }) {
   return (
@@ -37,7 +30,7 @@ export function EventLog({ events, connected }: { events: LiveEvent[]; connected
         ) : (
           events.map((e, i) => (
             <div
-              key={i}
+              key={`${e.created_at}-${e.event_type}-${i}`}
               className="px-5 py-3 border-b flex items-center gap-3 animate-slide-in"
               style={{ borderColor: "var(--color-hairline)", animationDelay: `${Math.min(i * 30, 300)}ms` }}
             >

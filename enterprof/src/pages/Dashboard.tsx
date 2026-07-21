@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { formatDistanceToNowStrict } from "date-fns";
 import { ArrowRight, Clock, Gauge, TrendingUp } from "lucide-react";
-import { api, type Workflow, type Approval } from "../lib/incident-command/api";
+import { api, type Workflow, type Approval, type PaginatedResponse } from "../lib/incident-command/api";
 import { useLiveEvents } from "../lib/incident-command/useLiveEvents";
 import { computeDashboardMetrics } from "../lib/incident-command/dashboard-metrics";
 import { getWorkflowStatusMeta } from "../lib/incident-command/workflow-status";
@@ -14,37 +14,50 @@ export default function Dashboard() {
   const [workflows, setWorkflows] = useState<Workflow[]>([]);
   const [approvals, setApprovals] = useState<Approval[]>([]);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
-  const [, setTick] = useState(0);
+  const [error, setError] = useState<string | null>(null);
+  const lastRefreshRef = useRef(0);
   const { events, connected } = useLiveEvents();
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (signal?: AbortSignal) => {
     try {
-      const [wf, ap] = await Promise.all([api.listWorkflows(), api.listApprovals()]);
-      setWorkflows(wf);
-      setApprovals(ap);
+      const [wfRes, apRes] = await Promise.all([api.listWorkflows(signal, 1, 100), api.listApprovals(signal, 1, 100)]);
+      setWorkflows(wfRes.data);
+      setApprovals(apRes.data);
       setLastUpdated(new Date());
+      setError(null);
+      lastRefreshRef.current = Date.now();
     } catch {
-      // fail quietly
+      setError("Failed to load dashboard data");
     }
   }, []);
 
   useEffect(() => {
-    refresh();
-    const id = setInterval(refresh, 4000);
-    return () => clearInterval(id);
+    const ac = new AbortController();
+    refresh(ac.signal);
+    const id = setInterval(() => refresh(ac.signal), 6000);
+    return () => { clearInterval(id); ac.abort(); };
   }, [refresh]);
 
   useEffect(() => {
-    if (events.length > 0) refresh();
+    if (events.length > 0 && Date.now() - lastRefreshRef.current > 2000) {
+      refresh();
+    }
   }, [events.length, refresh]);
 
-  // Re-render every second so the "updated Xs ago" label ticks.
-  useEffect(() => {
-    const id = setInterval(() => setTick((t) => t + 1), 1000);
-    return () => clearInterval(id);
-  }, []);
+  const [updatedAt, setUpdatedAt] = useState<string>("");
 
-  const metrics = computeDashboardMetrics(workflows);
+  useEffect(() => {
+    function tick() {
+      if (lastUpdated) {
+        setUpdatedAt(formatDistanceToNowStrict(lastUpdated, { addSuffix: true }));
+      }
+    }
+    tick();
+    const id = setInterval(tick, 5000);
+    return () => clearInterval(id);
+  }, [lastUpdated]);
+
+  const metrics = useMemo(() => computeDashboardMetrics(workflows), [workflows]);
 
   return (
     <div className="flex flex-col h-full animate-enter">
@@ -57,42 +70,29 @@ export default function Dashboard() {
         </h1>
         <p className="text-sm mt-1" style={{ color: "var(--color-dim)" }}>
           {lastUpdated
-            ? `Updated ${formatDistanceToNowStrict(lastUpdated, { addSuffix: true })}`
+            ? `Updated ${updatedAt}`
             : "Waiting for first update…"}
         </p>
+        {error && (
+          <p className="text-xs font-mono mt-1" style={{ color: "var(--color-signal-red)" }}>
+            {error}
+          </p>
+        )}
       </div>
 
       <div className="grid grid-cols-3 gap-4 p-6 pb-0">
-        <StatCard
-          Icon={Clock}
-          label="MTTR"
-          value={metrics.mttrLabel ?? "—"}
-        />
-        <StatCard
-          Icon={Gauge}
-          label="Active Incidents"
-          value={String(metrics.activeCount)}
-        />
-        <StatCard
-          Icon={TrendingUp}
-          label="Auto-Resolved"
-          value={metrics.autoResolvedPercent != null ? `${metrics.autoResolvedPercent.toFixed(1)}%` : "—"}
-        />
+        <StatCard Icon={Clock} label="MTTR" value={metrics.mttrLabel ?? "—"} />
+        <StatCard Icon={Gauge} label="Active Incidents" value={String(metrics.activeCount)} />
+        <StatCard Icon={TrendingUp} label="Auto-Resolved" value={metrics.autoResolvedPercent != null ? `${metrics.autoResolvedPercent.toFixed(1)}%` : "—"} />
       </div>
 
       <main className="flex-1 grid grid-cols-12 gap-4 p-6 min-h-0">
-        <section
-          className="icc-card col-span-7 rounded-lg border min-h-0 flex flex-col"
-          style={{ backgroundColor: "var(--color-panel)", borderColor: "var(--color-hairline)" }}
-        >
+        <section className="icc-card col-span-7 rounded-lg border min-h-0 flex flex-col" style={{ backgroundColor: "var(--color-panel)", borderColor: "var(--color-hairline)" }}>
           <div className="px-5 py-3.5 border-b flex items-center justify-between" style={{ borderColor: "var(--color-hairline)" }}>
             <div className="flex items-center gap-2">
               <h2 className="font-semibold text-base tracking-wide">Workflows</h2>
               {workflows.length > 0 && (
-                <span
-                  className="text-xs font-mono font-semibold rounded-full min-w-[20px] h-[20px] px-1.5 flex items-center justify-center"
-                  style={{ backgroundColor: "var(--color-signal-cyan)", color: "var(--color-ink)" }}
-                >
+                <span className="text-xs font-mono font-semibold rounded-full min-w-[20px] h-[20px] px-1.5 flex items-center justify-center" style={{ backgroundColor: "var(--color-signal-cyan)", color: "var(--color-ink)" }}>
                   {workflows.length}
                 </span>
               )}
@@ -112,34 +112,21 @@ export default function Dashboard() {
                 const meta = getWorkflowStatusMeta(w.state);
                 const progress = getProgressPercent(w.state);
                 return (
-                  <Link
-                    key={w.id}
-                    to={`/workflows/${w.id}`}
-                    className="block p-5 transition-all duration-200 hover:bg-white/[0.03] hover:shadow-[inset_0_0_0_1px_rgba(69,217,200,0.08)]"
-                    style={{ borderColor: "var(--color-hairline)" }}
-                  >
+                  <Link key={w.id} to={`/workflows/${w.id}`} className="block p-5 transition-all duration-200 hover:bg-white/[0.03] hover:shadow-[inset_0_0_0_1px_rgba(69,217,200,0.08)]" style={{ borderColor: "var(--color-hairline)" }}>
                     <div className="flex items-center justify-between mb-2.5">
                       <div className="flex items-center gap-2 min-w-0">
-                        <span
-                          className="flex items-center gap-1 text-xs font-mono px-2 py-0.5 rounded shrink-0"
-                          style={{ color: meta.colorVar, border: `1px solid ${meta.colorVar}` }}
-                        >
+                        <span className="flex items-center gap-1 text-xs font-mono px-2 py-0.5 rounded shrink-0" style={{ color: meta.colorVar, border: `1px solid ${meta.colorVar}` }}>
                           <meta.Icon className="w-3.5 h-3.5" />
                           {meta.group}
                         </span>
-                        <span className="font-mono text-sm truncate" style={{ color: "var(--color-text)" }}>
-                          {w.state}
-                        </span>
+                        <span className="font-mono text-sm truncate" style={{ color: "var(--color-text)" }}>{w.state}</span>
                       </div>
                       <span className="text-xs font-mono shrink-0" style={{ color: "var(--color-dim)" }}>
                         {formatDistanceToNowStrict(new Date(w.updated_at), { addSuffix: true })}
                       </span>
                     </div>
                     <div className="h-1.5 rounded-full overflow-hidden" style={{ backgroundColor: "var(--color-hairline)" }}>
-                      <div
-                        className="h-full rounded-full transition-all duration-500"
-                        style={{ width: `${progress}%`, backgroundColor: meta.colorVar }}
-                      />
+                      <div className="h-full rounded-full transition-all duration-500" style={{ width: `${progress}%`, backgroundColor: meta.colorVar }} />
                     </div>
                   </Link>
                 );
@@ -148,17 +135,11 @@ export default function Dashboard() {
           </div>
         </section>
 
-        <section
-          className="icc-card col-span-5 rounded-lg border min-h-0 flex flex-col"
-          style={{ backgroundColor: "var(--color-panel)", borderColor: "var(--color-hairline)" }}
-        >
-          <ApprovalsPanel approvals={approvals} />
+        <section className="icc-card col-span-5 rounded-lg border min-h-0 flex flex-col" style={{ backgroundColor: "var(--color-panel)", borderColor: "var(--color-hairline)" }}>
+          <ApprovalsPanel approvals={approvals} onAction={refresh} />
         </section>
 
-        <section
-          className="icc-card col-span-12 rounded-lg border min-h-[280px] max-h-[360px] flex flex-col"
-          style={{ backgroundColor: "var(--color-panel)", borderColor: "var(--color-hairline)" }}
-        >
+        <section className="icc-card col-span-12 rounded-lg border min-h-[280px] max-h-[360px] flex flex-col" style={{ backgroundColor: "var(--color-panel)", borderColor: "var(--color-hairline)" }}>
           <EventLog events={events} connected={connected} />
         </section>
       </main>
@@ -166,29 +147,14 @@ export default function Dashboard() {
   );
 }
 
-function StatCard({
-  Icon,
-  label,
-  value,
-}: {
-  Icon: typeof Clock;
-  label: string;
-  value: string;
-}) {
+function StatCard({ Icon, label, value }: { Icon: typeof Clock; label: string; value: string }) {
   return (
-    <div
-      className="icc-card rounded-lg border p-5"
-      style={{ backgroundColor: "var(--color-panel)", borderColor: "var(--color-hairline)" }}
-    >
+    <div className="icc-card rounded-lg border p-5" style={{ backgroundColor: "var(--color-panel)", borderColor: "var(--color-hairline)" }}>
       <div className="flex items-center justify-between mb-2.5">
-        <span className="text-xs font-mono tracking-widest uppercase" style={{ color: "var(--color-dim)" }}>
-          {label}
-        </span>
+        <span className="text-xs font-mono tracking-widest uppercase" style={{ color: "var(--color-dim)" }}>{label}</span>
         <Icon className="w-4 h-4" style={{ color: "var(--color-muted)" }} />
       </div>
-      <p className="text-3xl font-semibold" style={{ color: "var(--color-text)" }}>
-        {value}
-      </p>
+      <p className="text-3xl font-semibold" style={{ color: "var(--color-text)" }}>{value}</p>
     </div>
   );
 }
