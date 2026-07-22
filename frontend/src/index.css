@@ -1,0 +1,131 @@
+@import "tailwindcss";
+
+@theme {
+  /* Ground: a control-room graphite, not pure black, not cream. */
+  --color-ink: #0f1218;
+  --color-panel: #171b24;
+  --color-panel-raised: #1e2330;
+  --color-hairline: #2a3040;
+  --color-text: #e6e9ef;
+  --color-muted: #8a93a8;
+  --color-dim: #5b6478;
+
+  /* Signal colors -- each one is reserved for a specific state category,
+     never used decoratively. */
+  --color-signal-amber: #f5a623;   /* pending human approval, P0 risk */
+  --color-signal-cyan: #45d9c8;    /* actively running / in analysis */
+  --color-signal-green: #3ecf8e;   /* approved / completed */
+  --color-signal-red: #ef5350;     /* rejected / failed */
+  --color-signal-violet: #8b7cf6; /* appeal / reevaluation loop */
+
+  --font-display: "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", monospace;
+}
+
+html, body, #root {
+  height: 100%;
+}
+
+body {
+  background-color: var(--color-ink);
+  color: var(--color-text);
+  font-family: var(--font-display);
+  background-image:
+    radial-gradient(circle at 15% 0%, rgba(69, 217, 200, 0.06), transparent 40%),
+    radial-gradient(circle at 85% 100%, rgba(245, 166, 35, 0.05), transparent 40%);
+}
+
+::selection {
+  background: var(--color-signal-cyan);
+  color: var(--color-ink);
+}
+
+* {
+  scrollbar-color: var(--color-hairline) transparent;
+  scrollbar-width: thin;
+}
+
+/* Focus-visible ring for keyboard accessibility */
+:focus-visible {
+  outline: 2px solid var(--color-signal-cyan);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* Skeleton shimmer animation */
+@keyframes shimmer {
+  0% { background-position: -400px 0; }
+  100% { background-position: 400px 0; }
+}
+
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--color-panel-raised) 25%,
+    var(--color-hairline) 50%,
+    var(--color-panel-raised) 75%
+  );
+  background-size: 800px 100%;
+  animation: shimmer 1.8s ease-in-out infinite;
+  border-radius: 4px;
+}
+
+/* Page entrance animation */
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-enter {
+  animation: fadeInUp 0.3s ease-out both;
+}
+
+/* Event row entrance */
+@keyframes slideInFromLeft {
+  from {
+    opacity: 0;
+    transform: translateX(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.animate-slide-in {
+  animation: slideInFromLeft 0.25s ease-out both;
+}
+
+/* Pulse dot for active/current state */
+@keyframes pulseDot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.6; transform: scale(1.35); }
+}
+
+.animate-pulse-dot {
+  animation: pulseDot 2s ease-in-out infinite;
+}
+
+/* Subtle border pulse for pending items */
+@keyframes borderPulse {
+  0%, 100% { border-color: var(--color-signal-amber); }
+  50% { border-color: rgba(245, 166, 35, 0.35); }
+}
+
+.animate-border-pulse {
+  animation: borderPulse 2.5s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
