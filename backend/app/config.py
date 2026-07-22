@@ -19,6 +19,9 @@ class Settings(BaseSettings):
 
     slack_webhook_url: str = ""
 
+    pagerduty_api_key: str = ""
+    pagerduty_service_id: str = ""
+
     approval_poll_interval_seconds: int = 5
 
     backend_host: str = "0.0.0.0"
@@ -28,12 +31,19 @@ class Settings(BaseSettings):
     database_url: str = f"sqlite+aiosqlite:///{Path(__file__).parent.parent / 'workflow.db'}"
 
     @property
+    def notion_approvals_url(self) -> str:
+        if self.notion_approvals_data_source_id:
+            return f"https://notion.so/{self.notion_approvals_data_source_id.replace('-', '')}"
+        return ""
+
+    @property
     def integrations_status(self) -> dict:
         return {
             "gemini": {"configured": bool(self.gemini_api_key)},
             "notion": {"configured": bool(self.notion_token)},
             "github": {"configured": bool(self.github_token and self.github_owner)},
             "slack": {"configured": bool(self.slack_webhook_url)},
+            "pagerduty": {"configured": bool(self.pagerduty_api_key)},
         }
 
     model_config = {"env_file": str(Path(__file__).parent.parent.parent / ".env")}

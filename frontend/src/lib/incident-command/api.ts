@@ -38,6 +38,7 @@ export interface Approval {
   approval_id: string;
   last_known_status: string;
   processed: boolean;
+  notion_url: string;
 }
 
 export interface IntegrationsStatus {
@@ -45,6 +46,7 @@ export interface IntegrationsStatus {
   notion: { configured: boolean };
   github: { configured: boolean };
   slack: { configured: boolean };
+  pagerduty: { configured: boolean };
 }
 
 export interface IncidentDetail {
@@ -74,6 +76,20 @@ export interface Policy {
     "Required Action"?: { select: { name: string } };
     Active?: { checkbox: boolean };
   };
+}
+
+export interface DashboardAnalytics {
+  total_incidents: number;
+  active_incidents: number;
+  completed_incidents: number;
+  failed_incidents: number;
+  mttr_seconds: number | null;
+  revenue_at_risk: number;
+  sla_compliance: number;
+  policy_passed: number;
+  policy_failed: number;
+  confidence_scores: number[];
+  incidents_over_time: Array<{ date: string; count: number }>;
 }
 
 export interface SearchResult {
@@ -160,4 +176,32 @@ export const api = {
 
   retryFailedActions: (workflowId: string) =>
     req<{ status: string; workflow_id: string; retried_count: number }>(`/api/workflows/${workflowId}/retry-failed-actions`, { method: "POST" }),
+
+  pauseWorkflow: (workflowId: string) =>
+    req<{ workflow_id: string; status: string }>(`/api/workflows/${workflowId}/pause`, { method: "POST" }),
+  resumeWorkflow: (workflowId: string) =>
+    req<{ workflow_id: string; status: string }>(`/api/workflows/${workflowId}/resume`, { method: "POST" }),
+  cancelWorkflow: (workflowId: string) =>
+    req<{ workflow_id: string; status: string }>(`/api/workflows/${workflowId}/cancel`, { method: "POST" }),
+
+  getDashboardAnalytics: (signal?: AbortSignal) =>
+    req<DashboardAnalytics>("/api/analytics/dashboard", { signal }),
+
+  getWorkflowThinking: (workflowId: string, signal?: AbortSignal) =>
+    req<PaginatedResponse<WorkflowEvent>>(`/api/workflows/${workflowId}/thinking`, { signal }),
+
+  startSimulation: (count = 20, concurrency = 5, interval = 2.0) =>
+    req<{ simulation_id: string; total: number; status: string }>(
+      `/api/simulation/start${qs({ count, concurrency, interval })}`, { method: "POST" }
+    ),
+  listSimulations: (signal?: AbortSignal) =>
+    req<{ data: Array<Record<string, unknown>> }>("/api/simulations", { signal }),
+  getSimulation: (simId: string, signal?: AbortSignal) =>
+    req<Record<string, unknown>>(`/api/simulation/${simId}`, { signal }),
+  cancelSimulation: (simId: string) =>
+    req<{ status: string; simulation_id: string }>(`/api/simulation/${simId}/cancel`, { method: "POST" }),
+  pauseSimulation: (simId: string) =>
+    req<{ status: string; simulation_id: string }>(`/api/simulation/${simId}/pause`, { method: "POST" }),
+  resumeSimulation: (simId: string) =>
+    req<{ status: string; simulation_id: string }>(`/api/simulation/${simId}/resume`, { method: "POST" }),
 };

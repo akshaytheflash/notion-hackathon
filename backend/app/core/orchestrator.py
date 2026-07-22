@@ -18,6 +18,7 @@ from app.agents.operations import OperationsAgent
 from app.adapters.notion import NotionAdapter
 from app.adapters.github import GitHubAdapter
 from app.adapters.slack import SlackAdapter
+from app.adapters.pagerduty import PagerDutyAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,7 @@ class Orchestrator:
         self.notion = NotionAdapter()
         self.github = GitHubAdapter()
         self.slack = SlackAdapter()
+        self.pagerduty = PagerDutyAdapter()
         self._event_listeners: list = []
 
     def on_event(self, listener) -> None:
@@ -85,6 +87,12 @@ class Orchestrator:
         except Exception as e:
             logger.warning(f"Notion incident creation failed (non-blocking): {e}")
         await self.slack.send_notification(f"🚨 P0 Incident Created: {name}\nID: {incident_id[:8]}\nRevenue Risk: ₹{revenue_risk_per_day:,.0f}/day")
+        await self.pagerduty.trigger_incident(
+            title=f"[{severity}] {name}",
+            description=f"Revenue Risk: ₹{revenue_risk_per_day:,.0f}/day\n{description}",
+            severity=severity,
+            dedup_key=f"incident-{incident_id}",
+        )
 
         return {"workflow_id": workflow_id, "incident_id": incident_id}
 
@@ -131,7 +139,9 @@ class Orchestrator:
 
             context = json.loads(workflow.context_json or "{}")
 
-            eng_output = await self.engineering.think(context, workflow.state)
+            eng_output = await self.engineering.think(
+                context, workflow.state, workflow_id=workflow_id, emit_event=self._emit_event,
+            )
             if not eng_output:
                 logger.error(f"Engineering analysis returned None for workflow {workflow_id}")
                 await self._transition(session, workflow, "FAILED")
@@ -143,7 +153,7 @@ class Orchestrator:
                                                 eng_output.reasoning_summary, eng_output.evidence, eng_output.confidence)
 
             await self._transition(session, workflow, "RESOURCE_REQUESTED")
-            await asyncio.sleep(10)
+            await asyncio.sleep(5)
             requested_amount = eng_output.requested_amount if eng_output.requested_amount > 0 else 80000.0
             context["requested_amount"] = requested_amount
             workflow.context_json = json.dumps(context, default=str)
@@ -155,9 +165,12 @@ class Orchestrator:
             await self._transition(session, workflow, "FINANCE_REVIEW")
             policy_result = await self._policy_check(requested_amount, workflow_id)
 
-            fin_output = await self.finance.think(context, workflow.state,
-                                                    policy_result=policy_result.model_dump(),
-                                                    engineering_message=eng_output.message_to_department)
+            fin_output = await self.finance.think(
+                context, workflow.state,
+                policy_result=policy_result.model_dump(),
+                engineering_message=eng_output.message_to_department,
+                workflow_id=workflow_id, emit_event=self._emit_event,
+            )
             if not fin_output:
                 logger.error(f"Finance review returned None for workflow {workflow_id}. Gemini call likely failed.")
                 await self._transition(session, workflow, "FAILED")
@@ -177,10 +190,13 @@ class Orchestrator:
                 )
 
                 await self._transition(session, workflow, "ENGINEERING_APPEAL")
-                await asyncio.sleep(10)
-                appeal_output = await self.engineering.think(context, workflow.state,
-                                                              policy_result=policy_result.model_dump(),
-                                                              finance_decision=fin_output.model_dump())
+                await asyncio.sleep(5)
+                appeal_output = await self.engineering.think(
+                    context, workflow.state,
+                    policy_result=policy_result.model_dump(),
+                    finance_decision=fin_output.model_dump(),
+                    workflow_id=workflow_id, emit_event=self._emit_event,
+                )
                 if not appeal_output:
                     await self._transition(session, workflow, "FAILED")
                     return {"workflow_id": workflow_id, "status": "FAILED", "error": "Engineering appeal failed"}
@@ -191,10 +207,13 @@ class Orchestrator:
                                                     appeal_output.reasoning_summary, appeal_output.evidence, appeal_output.confidence)
 
                 await self._transition(session, workflow, "FINANCE_REEVALUATION")
-                await asyncio.sleep(10)
-                reeval_output = await self.finance.think(context, workflow.state,
-                                                          policy_result=policy_result.model_dump(),
-                                                          appeal=appeal_output.model_dump())
+                await asyncio.sleep(5)
+                reeval_output = await self.finance.think(
+                    context, workflow.state,
+                    policy_result=policy_result.model_dump(),
+                    appeal=appeal_output.model_dump(),
+                    workflow_id=workflow_id, emit_event=self._emit_event,
+                )
                 if not reeval_output:
                     await self._transition(session, workflow, "FAILED")
                     return {"workflow_id": workflow_id, "status": "FAILED", "error": "Finance reevaluation failed"}
@@ -328,9 +347,12 @@ class Orchestrator:
             await self._emit_event("GITHUB_ISSUE_CREATED", workflow.id, "github", issue or {"error": "failed"})
 
             await self._transition(session, workflow, "OPERATIONS_REVIEW")
-            await asyncio.sleep(10)
+            await asyncio.sleep(5)
 
-            ops_output = await self.operations.think(context, workflow.state, github_result=issue)
+            ops_output = await self.operations.think(
+                context, workflow.state, github_result=issue,
+                workflow_id=workflow_id, emit_event=self._emit_event,
+            )
             await self._emit_event("OPERATIONS_REVIEW_COMPLETED", workflow.id, "operations",
                                     ops_output.model_dump() if ops_output else {})
 
@@ -350,6 +372,40 @@ class Orchestrator:
             await self._emit_event("APPROVAL_APPROVED", workflow_id, "approval_watcher", {})
             await self._transition(session, workflow, "APPROVED")
         return await self._execute_approved(workflow_id, context)
+
+    async def pause_workflow(self, workflow_id: str) -> dict:
+        async with async_session() as session:
+            workflow = await session.get(Workflow, workflow_id)
+            if not workflow:
+                return {"error": "workflow not found"}
+            if workflow.state in ("COMPLETED", "FAILED", "CANCELLED", "PAUSED"):
+                return {"error": f"cannot pause workflow in state {workflow.state}"}
+            from_state = workflow.state
+            await self._transition(session, workflow, "PAUSED")
+            await self._emit_event("WORKFLOW_PAUSED", workflow_id, "system",
+                                    {"from": from_state})
+        return {"workflow_id": workflow_id, "status": "PAUSED"}
+
+    async def resume_workflow(self, workflow_id: str) -> dict:
+        async with async_session() as session:
+            workflow = await session.get(Workflow, workflow_id)
+            if not workflow:
+                return {"error": "workflow not found"}
+            if workflow.state != "PAUSED":
+                return {"error": f"workflow in state {workflow.state}, not PAUSED"}
+            await self._emit_event("WORKFLOW_RESUMED", workflow_id, "system", {})
+        return {"workflow_id": workflow_id, "status": "RESUMED"}
+
+    async def cancel_workflow(self, workflow_id: str) -> dict:
+        async with async_session() as session:
+            workflow = await session.get(Workflow, workflow_id)
+            if not workflow:
+                return {"error": "workflow not found"}
+            if workflow.state in ("COMPLETED", "FAILED", "CANCELLED"):
+                return {"error": f"cannot cancel workflow in state {workflow.state}"}
+            await self._transition(session, workflow, "CANCELLED")
+            await self._emit_event("WORKFLOW_CANCELLED", workflow_id, "system", {})
+        return {"workflow_id": workflow_id, "status": "CANCELLED"}
 
     async def resume_rejected_workflow(self, workflow_id: str) -> dict:
         async with async_session() as session:

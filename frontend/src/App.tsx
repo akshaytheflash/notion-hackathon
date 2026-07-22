@@ -1,29 +1,50 @@
-import { BrowserRouter, Routes, Route } from "react-router-dom";
-import { Layout } from "./components/Layout";
-import Dashboard from "./pages/Dashboard";
-import IncidentList from "./pages/IncidentList";
-import IncidentDetailPage from "./pages/IncidentDetail";
-import WorkflowListPage from "./pages/WorkflowListPage";
-import WorkflowDetailPage from "./pages/WorkflowDetail";
-import Decisions from "./pages/Decisions";
-import Policies from "./pages/Policies";
-import ActionLog from "./pages/ActionLog";
+import { Component, type ReactNode } from "react";
+import { Toaster } from "@/components/ui/toaster";
+import { Toaster as Sonner } from "@/components/ui/sonner";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { createBrowserRouter, RouterProvider } from "react-router-dom";
+import { routers } from "./router";
 
-export default function App() {
-  return (
-    <BrowserRouter>
-      <Routes>
-        <Route element={<Layout />}>
-          <Route path="/" element={<Dashboard />} />
-          <Route path="/incidents" element={<IncidentList />} />
-          <Route path="/incidents/:incidentId" element={<IncidentDetailPage />} />
-          <Route path="/workflows" element={<WorkflowListPage />} />
-          <Route path="/workflows/:workflowId" element={<WorkflowDetailPage />} />
-          <Route path="/decisions" element={<Decisions />} />
-          <Route path="/policies" element={<Policies />} />
-          <Route path="/action-log" element={<ActionLog />} />
-        </Route>
-      </Routes>
-    </BrowserRouter>
-  );
+const queryClient = new QueryClient();
+const router = createBrowserRouter(routers);
+
+class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
+  state = { error: null as Error | null };
+  static getDerivedStateFromError(error: Error) { return { error }; }
+  render() {
+    if (this.state.error) {
+      return (
+        <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", backgroundColor: "#0B1D33", color: "#e6e9ef", fontFamily: "monospace" }}>
+          <div style={{ textAlign: "center", padding: "2rem" }}>
+            <h1 style={{ fontSize: "1.5rem", marginBottom: "1rem" }}>Something went wrong</h1>
+            <p style={{ color: "#8a93a8", marginBottom: "1rem" }}>{this.state.error.message}</p>
+            <button
+              onClick={() => { this.setState({ error: null }); window.location.href = "/"; }}
+              style={{ padding: "0.5rem 1.5rem", backgroundColor: "#45d9c8", color: "#0f1218", border: "none", borderRadius: "0.375rem", cursor: "pointer", fontFamily: "monospace" }}
+            >
+              Return to Dashboard
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
 }
+
+const App = () => {
+  return (
+    <ErrorBoundary>
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider>
+          <Toaster />
+          <Sonner />
+          <RouterProvider router={router} />
+        </TooltipProvider>
+      </QueryClientProvider>
+    </ErrorBoundary>
+  );
+};
+
+export default App;

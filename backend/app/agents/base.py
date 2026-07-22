@@ -1,6 +1,7 @@
+import asyncio
 import json
 import logging
-from typing import Any
+from typing import Any, Callable, Coroutine
 from app.adapters.gemini import GeminiAdapter
 from app.models.schemas import AgentOutput
 
@@ -67,13 +68,42 @@ class BaseAgent:
 
         return ctx
 
-    async def think(self, incident: dict, workflow_state: str, **extras) -> AgentOutput | None:
+    async def think(
+        self, incident: dict, workflow_state: str, *,
+        emit_event: Callable[[str, str, str, dict], Coroutine] | None = None,
+        workflow_id: str = "",
+        **extras
+    ) -> AgentOutput | None:
         system_prompt = self.build_system_prompt()
         user_prompt = self.build_context(incident, workflow_state, **extras)
-        result = await self.gemini.generate_structured(system_prompt, user_prompt, OUTPUT_SCHEMA)
+
+        if emit_event and workflow_id:
+            await emit_event("AGENT_THINKING_STARTED", workflow_id, self.name, {
+                "agent": self.name,
+                "department": self.department,
+                "workflow_state": workflow_state,
+                "system_prompt": system_prompt,
+                "user_prompt": user_prompt,
+            })
+
+        streaming_tokens: list[str] = []
+        async def on_token(token: str):
+            streaming_tokens.append(token)
+            if emit_event and workflow_id:
+                await emit_event("AGENT_THINKING_TOKEN", workflow_id, self.name, {
+                    "agent": self.name,
+                    "token": token,
+                    "accumulated": "".join(streaming_tokens),
+                })
+
+        result = await self.gemini.generate_structured(
+            system_prompt, user_prompt, OUTPUT_SCHEMA,
+            on_token=on_token if emit_event and workflow_id else None,
+        )
+
         if result:
             logger.info(f"{self.name} completed via Gemini for state {workflow_state}")
-            return AgentOutput(
+            agent_output = AgentOutput(
                 agent=result.get("agent", self.name),
                 department=result.get("department", self.department),
                 decision=result.get("decision", ""),
@@ -85,5 +115,18 @@ class BaseAgent:
                 message_to_department=result.get("message_to_department"),
                 requested_amount=result.get("requested_amount", 0.0),
             )
+            if emit_event and workflow_id:
+                await emit_event("AGENT_THINKING_COMPLETED", workflow_id, self.name, {
+                    "agent": self.name,
+                    "output": agent_output.model_dump(),
+                    "tokens": "".join(streaming_tokens) if streaming_tokens else None,
+                })
+            return agent_output
+
         logger.error(f"Gemini returned no result for {self.name} in state {workflow_state}. No fallback available.")
+        if emit_event and workflow_id:
+            await emit_event("AGENT_THINKING_FAILED", workflow_id, self.name, {
+                "agent": self.name,
+                "error": f"Gemini returned no result for state {workflow_state}",
+            })
         return None

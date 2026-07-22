@@ -16,9 +16,9 @@ if %errorlevel% neq 0 (
 echo  Done.
 
 echo.
-echo [2/4] Installing Node dependencies...
+echo [2/4] Installing Node dependencies (frontend)...
 cd frontend
-call npm install --silent
+call npm install --legacy-peer-deps --silent
 if %errorlevel% neq 0 (
     echo [!] npm install failed. Make sure Node.js is installed.
     pause
@@ -33,20 +33,20 @@ echo  Waiting for backend...
 timeout /t 5 /nobreak >nul
 
 echo.
-echo [4/4] Starting frontend dev server (port 5173)...
+echo [4/4] Starting frontend dev server (port 8080)...
 start "AI-OS-Frontend" cmd /c "cd /d "%~dp0frontend" && npx vite --host"
 echo  Waiting for frontend...
-timeout /t 3 /nobreak >nul
+timeout /t 5 /nobreak >nul
 
 echo.
 echo ========================================
 echo  Opening browser...
 echo ========================================
-start http://localhost:5173
+start http://localhost:8080
 
 echo.
 echo  Backend:  http://localhost:8000
-echo  Frontend: http://localhost:5173
+echo  Frontend: http://localhost:8080
 echo  Close this window to stop.
 echo.
 pause

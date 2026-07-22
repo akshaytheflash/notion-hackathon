@@ -46,6 +46,7 @@ class ApprovalResponse(BaseModel):
     approval_id: str
     last_known_status: str
     processed: bool
+    notion_url: str = ""
 
 
 class AgentOutput(BaseModel):

@@ -20,6 +20,7 @@ import { api, type IntegrationsStatus, type Workflow, type SearchResult } from "
 import { useIccTheme } from "../../lib/incident-command/useIccTheme";
 import { useLiveEvents } from "../../lib/incident-command/useLiveEvents";
 import { IntegrationStrip } from "./IntegrationStrip";
+import { CommandPalette } from "./CommandPalette";
 
 const NAV = [
   { to: "/", label: "Dashboard", Icon: LayoutDashboard },
@@ -465,6 +466,7 @@ export function Layout() {
           <Outlet />
         </main>
       </div>
+      <CommandPalette onRunDemo={runDemo} />
     </div>
   );
 }

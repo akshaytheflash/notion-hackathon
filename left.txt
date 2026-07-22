@@ -1,0 +1,70 @@
+Lmao, from what he marked as already done, here's what's **actually left**.
+
+## Biggest remaining features (the impressive ones)
+
+# Medium amount left
+
+* Workflow comparison
+* Drag-and-drop policy builder
+* Policy simulator
+* Version history
+* PDF export
+
+---
+
+# Backend still left
+
+* Redis caching
+* Alembic migrations
+* Better OpenAPI docs
+* Prometheus/OpenTelemetry
+* Better validation
+
+---
+
+# Integrations
+
+* Jira
+* Datadog
+* Sentry
+* Confluence
+* Email
+* Slack slash commands
+* Interactive Slack cards
+
+---
+
+# Production work
+
+* Full testing
+* TS strict mode
+* API versioning
+* PostgreSQL optimization
+
+---
+
+# Pure eye candy
+
+* Incident topology map
+* Heatmap
+* Cost calculator
+* Agent cards
+* Particle background
+* Sounds
+
+---
+
+# Long-term vision
+
+* AI learns over time
+* Build custom agents
+* Workflow templates
+* Multi-tenant SaaS
+* Incident correlation
+
+---
+
+## Overall
+
+* **Already done:** ~85%
+* **Still left:** ~15%

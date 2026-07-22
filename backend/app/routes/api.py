@@ -4,17 +4,19 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
-from sqlalchemy import select, delete
+from sqlalchemy import select, delete, func
 from app.models.database import async_session
 from app.models.workflow import Workflow, WorkflowEvent, IntegrationAction, ApprovalTracking, StoredPolicy
 from app.models.schemas import IncidentCreate, WorkflowResponse, WorkflowEventResponse, ApprovalResponse
 from app.config import settings
 from app.core.orchestrator import Orchestrator
+from app.core.simulation_runner import SimulationRunner
 from app.adapters.notion import NotionAdapter
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 orchestrator = Orchestrator()
+simulation_runner = SimulationRunner(orchestrator)
 notion = NotionAdapter()
 
 
@@ -171,6 +173,21 @@ async def get_workflow_events(workflow_id: str, page: int = 1, pageSize: int = 1
         }
 
 
+@router.post("/api/workflows/{workflow_id}/pause")
+async def pause_workflow(workflow_id: str):
+    return await orchestrator.pause_workflow(workflow_id)
+
+
+@router.post("/api/workflows/{workflow_id}/resume")
+async def resume_workflow(workflow_id: str):
+    return await orchestrator.resume_workflow(workflow_id)
+
+
+@router.post("/api/workflows/{workflow_id}/cancel")
+async def cancel_workflow(workflow_id: str):
+    return await orchestrator.cancel_workflow(workflow_id)
+
+
 @router.post("/api/approvals/{approval_id}/approve")
 async def approve_approval(approval_id: str):
     async with async_session() as session:
@@ -199,6 +216,7 @@ async def approve_approval(approval_id: str):
         "approval_id": tracking.approval_id,
         "last_known_status": "APPROVED",
         "processed": True,
+        "notion_url": settings.notion_approvals_url,
     }
 
 
@@ -230,6 +248,7 @@ async def reject_approval(approval_id: str):
         "approval_id": tracking.approval_id,
         "last_known_status": "REJECTED",
         "processed": True,
+        "notion_url": settings.notion_approvals_url,
     }
 
 
@@ -245,6 +264,7 @@ async def list_approvals(page: int = 1, pageSize: int = 50):
             .limit(pageSize)
         )
         approvals = result.scalars().all()
+        notion_url = settings.notion_approvals_url
         return {
             "data": [ApprovalResponse(
                 id=a.id,
@@ -252,6 +272,7 @@ async def list_approvals(page: int = 1, pageSize: int = 50):
                 approval_id=a.approval_id,
                 last_known_status=a.last_known_status,
                 processed=a.processed,
+                notion_url=notion_url,
             ) for a in approvals],
             "total": total,
             "page": page,
@@ -264,6 +285,13 @@ DECISION_EVENT_TYPES = {
     "FINANCE_DECISION_CREATED",
     "ENGINEERING_APPEAL_CREATED",
     "OPERATIONS_REVIEW_COMPLETED",
+}
+
+THINKING_EVENT_TYPES = {
+    "AGENT_THINKING_STARTED",
+    "AGENT_THINKING_TOKEN",
+    "AGENT_THINKING_COMPLETED",
+    "AGENT_THINKING_FAILED",
 }
 
 
@@ -509,6 +537,156 @@ async def list_action_log(page: int = 1, pageSize: int = 100):
         }
 
 
+@router.get("/api/analytics/dashboard")
+async def dashboard_analytics():
+    async with async_session() as session:
+        wf_result = await session.execute(select(Workflow).order_by(Workflow.created_at))
+        workflows = wf_result.scalars().all()
+
+        total = len(workflows)
+        completed = [w for w in workflows if w.state == "COMPLETED" and w.completed_at]
+        failed = [w for w in workflows if w.state in ("FAILED", "REJECTED")]
+        active = [w for w in workflows if w.state not in ("COMPLETED", "FAILED", "REJECTED")]
+
+        incidents_over_time: dict[str, int] = {}
+        for w in workflows:
+            day = w.created_at.strftime("%Y-%m-%d")
+            incidents_over_time[day] = incidents_over_time.get(day, 0) + 1
+
+        mttr_seconds = None
+        if completed:
+            total_ms = sum(
+                (w.completed_at - w.created_at).total_seconds()
+                for w in completed if w.completed_at
+            )
+            mttr_seconds = round(total_ms / len(completed), 1)
+
+        revenue_at_risk = 0.0
+        for w in workflows:
+            ctx = json.loads(w.context_json or "{}")
+            revenue_at_risk += ctx.get("revenue_risk_per_day", 0)
+
+        ev_result = await session.execute(
+            select(WorkflowEvent).where(WorkflowEvent.event_type == "POLICY_EVALUATED")
+        )
+        policy_evals = ev_result.scalars().all()
+        policy_passed = 0
+        policy_failed = 0
+        for ev in policy_evals:
+            payload = json.loads(ev.payload_json or "{}")
+            if payload.get("passed"):
+                policy_passed += 1
+            else:
+                policy_failed += 1
+
+        confidences = []
+        for et in ("ENGINEERING_ANALYSIS_COMPLETED", "FINANCE_DECISION_CREATED", "OPERATIONS_REVIEW_COMPLETED"):
+            evr = await session.execute(
+                select(WorkflowEvent).where(WorkflowEvent.event_type == et)
+            )
+            for ev in evr.scalars().all():
+                payload = json.loads(ev.payload_json or "{}")
+                conf = payload.get("confidence")
+                if conf is not None:
+                    confidences.append(round(conf, 2))
+
+        sla_compliance = round((len(completed) / max(total, 1)) * 100, 1)
+
+        return {
+            "total_incidents": total,
+            "active_incidents": len(active),
+            "completed_incidents": len(completed),
+            "failed_incidents": len(failed),
+            "mttr_seconds": mttr_seconds,
+            "revenue_at_risk": revenue_at_risk,
+            "sla_compliance": sla_compliance,
+            "policy_passed": policy_passed,
+            "policy_failed": policy_failed,
+            "confidence_scores": confidences,
+            "incidents_over_time": [
+                {"date": d, "count": c}
+                for d, c in sorted(incidents_over_time.items())
+            ],
+        }
+
+
+@router.get("/api/export/incidents.csv")
+async def export_incidents_csv():
+    async with async_session() as session:
+        result = await session.execute(select(Workflow).order_by(Workflow.created_at.desc()))
+        workflows = result.scalars().all()
+        lines = ["workflow_id,incident_id,state,created_at,updated_at,completed_at,revenue_risk_per_day"]
+        for w in workflows:
+            ctx = json.loads(w.context_json or "{}")
+            revenue = ctx.get("revenue_risk_per_day", 0)
+            lines.append(
+                f"{w.id},{w.incident_id},{w.state},{w.created_at.isoformat()},"
+                f"{w.updated_at.isoformat()},{w.completed_at.isoformat() if w.completed_at else ''},{revenue}"
+            )
+        from fastapi.responses import PlainTextResponse
+        return PlainTextResponse("\n".join(lines), media_type="text/csv", headers={"Content-Disposition": "attachment; filename=incidents.csv"})
+
+
+@router.get("/api/export/incidents.pdf")
+async def export_incidents_pdf():
+    async with async_session() as session:
+        result = await session.execute(select(Workflow).order_by(Workflow.created_at.desc()))
+        workflows = result.scalars().all()
+        rows = ""
+        for w in workflows:
+            ctx = json.loads(w.context_json or "{}")
+            rows += f"""
+            <tr>
+                <td>{w.id[:8]}</td>
+                <td>{w.incident_id[:8]}</td>
+                <td>{w.state}</td>
+                <td>{w.created_at.strftime('%Y-%m-%d %H:%M')}</td>
+                <td>{w.completed_at.strftime('%Y-%m-%d %H:%M') if w.completed_at else '-'}</td>
+                <td>${ctx.get('revenue_risk_per_day', 0):,.0f}</td>
+            </tr>"""
+        html = f"""<html><head><meta charset="utf-8"><title>Incident Report</title>
+<style>
+body {{ font-family: system-ui, sans-serif; padding: 40px; }}
+h1 {{ color: #333; }}
+table {{ width: 100%; border-collapse: collapse; margin-top: 20px; }}
+th, td {{ padding: 8px 12px; text-align: left; border-bottom: 1px solid #ddd; }}
+th {{ background: #f5f5f5; }}
+.total {{ margin-top: 20px; font-weight: bold; }}
+</style></head><body>
+<h1>Incident Report</h1>
+<p>Generated: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}</p>
+<p>Total incidents: {len(workflows)}</p>
+<table><thead><tr><th>WF ID</th><th>Incident</th><th>State</th><th>Created</th><th>Completed</th><th>Revenue/Day</th></tr></thead><tbody>{rows}</tbody></table>
+<p class="total">Total incidents: {len(workflows)}</p>
+</body></html>"""
+        from fastapi.responses import HTMLResponse
+        return HTMLResponse(html, headers={"Content-Disposition": "attachment; filename=incidents.html"})
+
+
+@router.get("/api/workflows/{workflow_id}/thinking")
+async def get_workflow_thinking(workflow_id: str):
+    async with async_session() as session:
+        result = await session.execute(
+            select(WorkflowEvent)
+            .where(
+                WorkflowEvent.workflow_id == workflow_id,
+                WorkflowEvent.event_type.in_(THINKING_EVENT_TYPES),
+            )
+            .order_by(WorkflowEvent.created_at)
+        )
+        events = result.scalars().all()
+        return {
+            "data": [WorkflowEventResponse(
+                id=e.id,
+                workflow_id=e.workflow_id,
+                event_type=e.event_type,
+                source=e.source,
+                payload_json=json.loads(e.payload_json or "{}"),
+                created_at=e.created_at,
+            ) for e in events],
+        }
+
+
 @router.post("/api/demo/seed")
 async def demo_seed():
     return {"status": "ok", "message": "Schema configured in Notion"}
@@ -519,6 +697,50 @@ async def run_primary_scenario(body: IncidentCreate | None = None):
     data = body.model_dump() if body else None
     result = await orchestrator.run_primary_scenario(incident_data=data)
     return result
+
+
+@router.post("/api/simulation/start")
+async def start_simulation(count: int = 20, concurrency: int = 5, interval: float = 2.0):
+    result = await simulation_runner.start_simulation(count, concurrency, interval)
+    return result
+
+
+@router.get("/api/simulations")
+async def list_simulations():
+    results = await simulation_runner.list_simulations()
+    return {"data": results}
+
+
+@router.get("/api/simulation/{sim_id}")
+async def get_simulation(sim_id: str):
+    result = await simulation_runner.get_status(sim_id)
+    if not result:
+        raise HTTPException(404, "Simulation not found")
+    return result
+
+
+@router.post("/api/simulation/{sim_id}/cancel")
+async def cancel_simulation(sim_id: str):
+    ok = await simulation_runner.cancel_simulation(sim_id)
+    if not ok:
+        raise HTTPException(404, "Simulation not found")
+    return {"status": "cancelling", "simulation_id": sim_id}
+
+
+@router.post("/api/simulation/{sim_id}/pause")
+async def pause_simulation(sim_id: str):
+    ok = await simulation_runner.pause_simulation(sim_id)
+    if not ok:
+        raise HTTPException(404, "Simulation not found")
+    return {"status": "paused", "simulation_id": sim_id}
+
+
+@router.post("/api/simulation/{sim_id}/resume")
+async def resume_simulation(sim_id: str):
+    ok = await simulation_runner.resume_simulation(sim_id)
+    if not ok:
+        raise HTTPException(404, "Simulation not found")
+    return {"status": "resumed", "simulation_id": sim_id}
 
 
 @router.post("/api/workflows/{workflow_id}/retry-failed-actions")
@@ -555,10 +777,22 @@ async def retry_failed_actions(workflow_id: str):
     return {"status": "retrying", "workflow_id": workflow_id, "retried_count": len(retried)}
 
 
+@router.post("/api/webhooks/generic")
+async def webhook_receiver(payload: dict):
+    event_type = payload.get("event_type", "WEBHOOK_RECEIVED")
+    source = payload.get("source", "webhook")
+    workflow_id = payload.get("workflow_id", "unknown")
+    await orchestrator._emit_event(event_type, workflow_id, source, payload.get("data", payload))
+    logger.info(f"Webhook received: {event_type} from {source}")
+    return {"status": "ok", "event_type": event_type}
+
+
 @router.websocket("/ws/workflows/{workflow_id}")
 async def workflow_ws(websocket: WebSocket, workflow_id: str):
     await websocket.accept()
     async def send_event(event):
+        if event.workflow_id != workflow_id and workflow_id != "live":
+            return
         try:
             await websocket.send_json({
                 "event_type": event.event_type,
@@ -576,7 +810,5 @@ async def workflow_ws(websocket: WebSocket, workflow_id: str):
     except WebSocketDisconnect:
         pass
     finally:
-        # Without this, every socket that ever connects stays registered forever,
-        # leaking listeners (and re-sending to dead sockets) for the life of the process.
         if send_event in orchestrator._event_listeners:
             orchestrator._event_listeners.remove(send_event)
