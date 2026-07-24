@@ -2,14 +2,15 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 type VoiceCommand = {
   patterns: RegExp[];
-  action: () => void;
-  feedback: string;
+  action: (transcript?: string) => void;
+  feedback: string | ((transcript?: string) => string);
 };
 
 export function useVoiceCommands(
   commands: VoiceCommand[],
   getAiResponse?: (query: string) => Promise<string | null>,
   onTranscript?: (text: string, isFinal: boolean) => void,
+  onUnmatchedSpeech?: (text: string) => boolean | Promise<boolean>,
 ) {
   const [isListening, setIsListening] = useState(false);
   const [transcript, setTranscript] = useState("");
@@ -21,9 +22,11 @@ export function useVoiceCommands(
   const isSpeakingRef = useRef(false);
   const onTranscriptRef = useRef(onTranscript);
   const getAiResponseRef = useRef(getAiResponse);
+  const onUnmatchedSpeechRef = useRef(onUnmatchedSpeech);
   const commandsRef = useRef(commands);
   onTranscriptRef.current = onTranscript;
   getAiResponseRef.current = getAiResponse;
+  onUnmatchedSpeechRef.current = onUnmatchedSpeech;
   commandsRef.current = commands;
 
   const stopRecognition = useCallback(() => {
@@ -63,7 +66,7 @@ export function useVoiceCommands(
 
       let finalTranscriptBuffer = "";
 
-      recognition.onresult = (event: SpeechRecognitionEvent) => {
+      recognition.onresult = async (event: SpeechRecognitionEvent) => {
         if (isSpeakingRef.current) return;
         let interimTranscript = "";
         let newFinal = "";
@@ -87,16 +90,18 @@ export function useVoiceCommands(
           setTranscript(text);
           const cmds = commandsRef.current;
           let matchedCmd: VoiceCommand | undefined;
+          let feedback: string | undefined;
           for (const cmd of cmds) {
             if (cmd.patterns.some((p) => p.test(text))) {
-              cmd.action();
-              setLastCommand(cmd.feedback);
+              cmd.action(text);
+              feedback = typeof cmd.feedback === "function" ? cmd.feedback(text) : cmd.feedback;
+              setLastCommand(feedback);
               matchedCmd = cmd;
               break;
             }
           }
           if (matchedCmd) {
-            speakAndPause(matchedCmd.feedback);
+            speakAndPause(feedback ?? "");
           } else {
             getAiResponseRef.current?.(text).then((answer) => {
               if (answer) {

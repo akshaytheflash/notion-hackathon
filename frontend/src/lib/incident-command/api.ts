@@ -196,6 +196,15 @@ export const api = {
       body: JSON.stringify({ query, db_context: dbContext }),
     }),
 
+  listRecipients: (signal?: AbortSignal) =>
+    req<Array<{ id: string; role: string; email: string; created_at: string }>>("/api/notification-recipients", { signal }),
+  createRecipient: (body: { role: string; email: string }) =>
+    req<{ id: string; role: string; email: string; created_at: string }>("/api/notification-recipients", { method: "POST", body: JSON.stringify(body) }),
+  updateRecipient: (id: string, body: { role: string; email: string }) =>
+    req<{ id: string; role: string; email: string; created_at: string }>(`/api/notification-recipients/${id}`, { method: "PUT", body: JSON.stringify(body) }),
+  deleteRecipient: (id: string) =>
+    req<{ status: string }>(`/api/notification-recipients/${id}`, { method: "DELETE" }),
+
   startSimulation: (count = 20, concurrency = 5, interval = 2.0) =>
     req<{ simulation_id: string; total: number; status: string }>(
       `/api/simulation/start${qs({ count, concurrency, interval })}`, { method: "POST" }

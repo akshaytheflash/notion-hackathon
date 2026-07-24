@@ -5,6 +5,7 @@ import {
   Bell,
   GitBranch,
   LayoutDashboard,
+  Mail,
   Mic,
   Moon,
   Play,
@@ -32,6 +33,7 @@ const NAV = [
   { to: "/decisions", label: "Decisions", Icon: ShieldCheck },
   { to: "/policies", label: "Policies", Icon: Scale },
   { to: "/action-log", label: "Action Log", Icon: ScrollText },
+  { to: "/notification-recipients", label: "Email Recipients", Icon: Mail },
 ];
 
 const TERMINAL_STATES = new Set(["COMPLETED", "FAILED", "REJECTED"]);
@@ -134,6 +136,12 @@ export function Layout() {
         policies: policiesRes.data,
         approvals: approvalsRes.data,
         analytics,
+        incident_creation_fields: {
+          name: "string - incident title",
+          severity: "string - P0, P1, or P2",
+          description: "string - description of the incident",
+          revenue_risk_per_day: "number - estimated daily revenue at risk in dollars",
+        },
       };
       const res = await api.aiQuery(query, dbContext as unknown as Record<string, unknown>);
       return res.answer;
@@ -159,6 +167,50 @@ export function Layout() {
       { patterns: [/show policies/, /go to policies/], action: () => navigate("/policies"), feedback: "Showing policies" },
       { patterns: [/show action log/, /go to action log/, /action log/], action: () => navigate("/action-log"), feedback: "Showing action log" },
       { patterns: [/run demo/, /start demo/, /fire drill/, /run scenario/], action: () => { runDemo(); }, feedback: "Running demo scenario" },
+      {
+        patterns: [/create incident/i, /new incident/i, /report incident/i, /open incident/i],
+        action: async (transcript) => {
+          try {
+            const text = transcript ?? "";
+            const cmdPats = [/create incident/i, /new incident/i, /report incident/i, /open incident/i];
+            let name = "";
+            for (const p of cmdPats) {
+              const m = text.match(p);
+              if (m && m.index !== undefined) {
+                name = text.slice(m.index + m[0].length).trim();
+                break;
+              }
+            }
+            if (!name || name.length < 2) { speak("Please provide an incident name."); return; }
+            const severity = transcript?.toLowerCase().includes("p0") ? "P0" : transcript?.toLowerCase().includes("p2") ? "P2" : "P1";
+            await api.createIncident({
+              name,
+              severity,
+              description: `Voice-created incident: ${name}`,
+              revenue_risk_per_day: severity === "P0" ? 400000 : severity === "P1" ? 100000 : 25000,
+            });
+            navigate("/incidents");
+          } catch (e) {
+            speak("Failed to create incident. Please try again.");
+          }
+        },
+        feedback: (transcript) => {
+          const text = transcript ?? "";
+          const cmdPats = [/create incident/i, /new incident/i, /report incident/i, /open incident/i];
+          let name = "";
+          for (const p of cmdPats) {
+            const m = text.match(p);
+            if (m && m.index !== undefined) {
+              name = text.slice(m.index + m[0].length).trim();
+              break;
+            }
+          }
+          name = name || "New Incident";
+          const severity = text.toLowerCase().includes("p0") ? "P0" : text.toLowerCase().includes("p2") ? "P2" : "P1";
+          const risk = severity === "P0" ? "$400k/day" : severity === "P1" ? "$100k/day" : "$25k/day";
+          return `${severity} incident "${name}" created with revenue risk ${risk}.`;
+        },
+      },
       { patterns: [/stop listening/, /go to sleep/, /shut up/, /silence/], action: () => voiceCommands.toggleListening(), feedback: "Voice control deactivated" },
     ],
     getAiResponse,

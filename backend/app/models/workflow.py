@@ -63,6 +63,15 @@ class ApprovalTracking(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
 
 
+class NotificationRecipient(Base):
+    __tablename__ = "notification_recipients"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    role: Mapped[str] = mapped_column(String(100), unique=True, index=True)
+    email: Mapped[str] = mapped_column(String(255))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+
 class StoredPolicy(Base):
     __tablename__ = "stored_policies"
 

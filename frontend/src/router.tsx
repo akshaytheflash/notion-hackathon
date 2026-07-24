@@ -8,6 +8,7 @@ import WorkflowDetailPage from "./pages/WorkflowDetail";
 import Decisions from "./pages/Decisions";
 import Policies from "./pages/Policies";
 import ActionLog from "./pages/ActionLog";
+import NotificationRecipients from "./pages/NotificationRecipients";
 
 export const routers = [
   {
@@ -23,6 +24,7 @@ export const routers = [
       { path: "decisions", name: "decisions", element: <Decisions /> },
       { path: "policies", name: "policies", element: <Policies /> },
       { path: "action-log", name: "action-log", element: <ActionLog /> },
+      { path: "notification-recipients", name: "notification-recipients", element: <NotificationRecipients /> },
     ],
   },
   /* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */

@@ -6,8 +6,8 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from sqlalchemy import select, delete, func
 from app.models.database import async_session
-from app.models.workflow import Workflow, WorkflowEvent, IntegrationAction, ApprovalTracking, StoredPolicy
-from app.models.schemas import IncidentCreate, WorkflowResponse, WorkflowEventResponse, ApprovalResponse
+from app.models.workflow import Workflow, WorkflowEvent, IntegrationAction, ApprovalTracking, StoredPolicy, NotificationRecipient
+from app.models.schemas import IncidentCreate, WorkflowResponse, WorkflowEventResponse, ApprovalResponse, NotificationRecipientCreate, NotificationRecipientResponse
 from app.config import settings
 from app.core.orchestrator import Orchestrator
 from app.core.simulation_runner import SimulationRunner
@@ -786,6 +786,51 @@ async def webhook_receiver(payload: dict):
     await orchestrator._emit_event(event_type, workflow_id, source, payload.get("data", payload))
     logger.info(f"Webhook received: {event_type} from {source}")
     return {"status": "ok", "event_type": event_type}
+
+
+@router.get("/api/notification-recipients")
+async def list_recipients():
+    async with async_session() as session:
+        result = await session.execute(select(NotificationRecipient).order_by(NotificationRecipient.role))
+        recipients = result.scalars().all()
+        return [{"id": r.id, "role": r.role, "email": r.email, "created_at": r.created_at.isoformat()} for r in recipients]
+
+
+@router.post("/api/notification-recipients")
+async def create_recipient(body: NotificationRecipientCreate):
+    async with async_session() as session:
+        existing = await session.execute(select(NotificationRecipient).where(NotificationRecipient.role == body.role))
+        if existing.scalar_one_or_none():
+            raise HTTPException(status_code=409, detail=f"Recipient for role '{body.role}' already exists")
+        recipient = NotificationRecipient(role=body.role, email=body.email)
+        session.add(recipient)
+        await session.commit()
+        await session.refresh(recipient)
+        return {"id": recipient.id, "role": recipient.role, "email": recipient.email, "created_at": recipient.created_at.isoformat()}
+
+
+@router.put("/api/notification-recipients/{recipient_id}")
+async def update_recipient(recipient_id: str, body: NotificationRecipientCreate):
+    async with async_session() as session:
+        recipient = await session.get(NotificationRecipient, recipient_id)
+        if not recipient:
+            raise HTTPException(status_code=404, detail="Recipient not found")
+        recipient.role = body.role
+        recipient.email = body.email
+        await session.commit()
+        await session.refresh(recipient)
+        return {"id": recipient.id, "role": recipient.role, "email": recipient.email, "created_at": recipient.created_at.isoformat()}
+
+
+@router.delete("/api/notification-recipients/{recipient_id}")
+async def delete_recipient(recipient_id: str):
+    async with async_session() as session:
+        recipient = await session.get(NotificationRecipient, recipient_id)
+        if not recipient:
+            raise HTTPException(status_code=404, detail="Recipient not found")
+        await session.delete(recipient)
+        await session.commit()
+    return {"status": "deleted"}
 
 
 @router.post("/api/ai/query")

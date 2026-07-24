@@ -3,6 +3,18 @@ from typing import Any
 from datetime import datetime
 
 
+class NotificationRecipientCreate(BaseModel):
+    role: str
+    email: str
+
+
+class NotificationRecipientResponse(BaseModel):
+    id: str
+    role: str
+    email: str
+    created_at: datetime
+
+
 class IncidentCreate(BaseModel):
     name: str
     severity: str = "P0"

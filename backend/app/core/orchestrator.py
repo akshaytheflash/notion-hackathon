@@ -2,13 +2,14 @@ import asyncio
 import json
 import uuid
 import logging
+import traceback
 from datetime import datetime, timezone
 from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.database import async_session
-from app.models.workflow import Workflow, WorkflowEvent, IntegrationAction, ApprovalTracking
+from app.models.workflow import Workflow, WorkflowEvent, IntegrationAction, ApprovalTracking, NotificationRecipient
 from app.models.schemas import AgentOutput, PolicyResult
 from app.core.state_machine import validate_transition, InvalidTransitionError, STATES
 from app.core.policy_engine import evaluate_spending_limit
@@ -19,6 +20,7 @@ from app.adapters.notion import NotionAdapter
 from app.adapters.github import GitHubAdapter
 from app.adapters.slack import SlackAdapter
 from app.adapters.pagerduty import PagerDutyAdapter
+from app.adapters.email import EmailAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +34,7 @@ class Orchestrator:
         self.github = GitHubAdapter()
         self.slack = SlackAdapter()
         self.pagerduty = PagerDutyAdapter()
+        self.email = EmailAdapter()
         self._event_listeners: list = []
 
     def on_event(self, listener) -> None:
@@ -318,6 +321,28 @@ class Orchestrator:
         await session.commit()
         return result
 
+    async def _send_completion_emails(self, workflow: Workflow, context: dict) -> None:
+        try:
+            async with async_session() as session:
+                result = await session.execute(select(NotificationRecipient))
+                recipients = result.scalars().all()
+            if not recipients:
+                logger.info("No notification recipients configured — skipping email")
+                return
+            to_emails = [r.email for r in recipients if r.email]
+            if not to_emails:
+                logger.info("No valid email addresses in recipients — skipping email")
+                return
+            logger.info(f"Sending completion email to {to_emails} for workflow {workflow.id[:8]}")
+            incident_data = {
+                **context,
+                "workflow_id": workflow.id,
+                "completed_at": workflow.completed_at.isoformat() if workflow.completed_at else "",
+            }
+            await self.email.send_incident_summary(to_emails, incident_data)
+        except Exception as e:
+            logger.error(f"Failed to send completion emails for workflow {workflow.id[:8]}: {traceback.format_exc()}")
+
     async def _execute_approved(self, workflow_id: str, context: dict) -> dict:
         async with async_session() as session:
             workflow = await session.get(Workflow, workflow_id)
@@ -335,11 +360,12 @@ class Orchestrator:
                 f"Description: {context.get('description', '')}\n"
             )
             idempotency_key = f"github:create_issue:{workflow.id}"
+            issue_title = f"[{context.get('severity', 'P0')}] {context.get('name', 'Emergency infrastructure scaling')}"
             issue = await self._run_idempotent_action(
                 session, workflow.id, "github_create_issue", idempotency_key,
                 lambda: self.github.create_issue(
                     idempotency_key,
-                    "[P0] Emergency infrastructure scaling approved",
+                    issue_title,
                     issue_body,
                 ),
             )
@@ -358,6 +384,7 @@ class Orchestrator:
 
             await self._transition(session, workflow, "COMPLETED")
             await self.slack.send_notification(f"✅ Workflow {workflow.id[:8]} completed successfully.")
+        await self._send_completion_emails(workflow, context)
         return {"workflow_id": workflow.id, "status": "COMPLETED", "github_issue": issue}
 
     async def resume_approved_workflow(self, workflow_id: str) -> dict:
@@ -420,4 +447,6 @@ class Orchestrator:
             await self._transition(session, workflow, "COMPLETED")
             await self.slack.send_notification(f"❌ Workflow {workflow_id[:8]} rejected by human.")
 
+            context = json.loads(workflow.context_json or "{}")
+        await self._send_completion_emails(workflow, context)
         return {"workflow_id": workflow_id, "status": "REJECTED"}

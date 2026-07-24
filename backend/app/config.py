@@ -22,6 +22,12 @@ class Settings(BaseSettings):
     pagerduty_api_key: str = ""
     pagerduty_service_id: str = ""
 
+    smtp_host: str = "smtp.gmail.com"
+    smtp_port: int = 587
+    smtp_username: str = ""
+    smtp_password: str = ""
+    smtp_from_email: str = ""
+
     approval_poll_interval_seconds: int = 5
 
     backend_host: str = "0.0.0.0"
@@ -44,6 +50,7 @@ class Settings(BaseSettings):
             "github": {"configured": bool(self.github_token and self.github_owner)},
             "slack": {"configured": bool(self.slack_webhook_url)},
             "pagerduty": {"configured": bool(self.pagerduty_api_key)},
+            "email": {"configured": bool(self.smtp_username and self.smtp_password and self.smtp_from_email)},
         }
 
     model_config = {"env_file": str(Path(__file__).parent.parent.parent / ".env")}
