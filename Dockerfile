@@ -8,7 +8,7 @@ RUN apt-get update && apt-get install -y curl && \
 WORKDIR /app
 
 COPY frontend/package.json frontend/package-lock.json ./frontend/
-RUN cd frontend && npm install
+RUN cd frontend && npm install --legacy-peer-deps
 
 COPY frontend/ ./frontend/
 RUN cd frontend && npm run build
