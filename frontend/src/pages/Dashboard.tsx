@@ -147,7 +147,7 @@ export default function Dashboard() {
 
         <AnalyticsCharts />
 
-        <AgentBrain />
+        <AgentBrain liveEvents={events} />
       </main>
     </div>
   );

@@ -1,9 +1,11 @@
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { AnimatePresence, motion } from "framer-motion";
 import {
   Bell,
   GitBranch,
   LayoutDashboard,
+  Mic,
   Moon,
   Play,
   Plus,
@@ -21,6 +23,7 @@ import { useIccTheme } from "../../lib/incident-command/useIccTheme";
 import { useLiveEvents } from "../../lib/incident-command/useLiveEvents";
 import { IntegrationStrip } from "./IntegrationStrip";
 import { CommandPalette } from "./CommandPalette";
+import { useVoiceCommands } from "../../hooks/useVoiceCommands";
 
 const NAV = [
   { to: "/", label: "Dashboard", Icon: LayoutDashboard },
@@ -108,6 +111,66 @@ export function Layout() {
     if (showForm) document.addEventListener("mousedown", handleClick);
     return () => document.removeEventListener("mousedown", handleClick);
   }, [showForm]);
+
+  // --- Voice Commands ---
+  const [liveTranscript, setLiveTranscript] = useState<string | null>(null);
+  const [transcriptIsFinal, setTranscriptIsFinal] = useState(false);
+  const transcriptTimerRef = useRef<ReturnType<typeof setTimeout>>();
+
+  const getAiResponse = useCallback(async (query: string): Promise<string | null> => {
+    try {
+      const [incidentsRes, workflowsRes, decisionsRes, policiesRes, approvalsRes, analytics] = await Promise.all([
+        api.listIncidents(undefined, 1, 200),
+        api.listWorkflows(undefined, 1, 200),
+        api.listDecisions(undefined, 1, 200),
+        api.listPolicies(undefined, 1, 200),
+        api.listApprovals(undefined, 1, 200),
+        api.getDashboardAnalytics(),
+      ]);
+      const dbContext = {
+        incidents: incidentsRes.data,
+        workflows: workflowsRes.data,
+        decisions: decisionsRes.data,
+        policies: policiesRes.data,
+        approvals: approvalsRes.data,
+        analytics,
+      };
+      const res = await api.aiQuery(query, dbContext as unknown as Record<string, unknown>);
+      return res.answer;
+    } catch {
+      speak("I had trouble looking that up.");
+      return null;
+    }
+  }, []);
+
+  const speak = useCallback((text: string) => {
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.rate = 1.1;
+    window.speechSynthesis.speak(utterance);
+  }, []);
+
+  const voiceCommands = useVoiceCommands(
+    [
+      { patterns: [/show dashboard/, /go to dashboard/, /home/], action: () => navigate("/"), feedback: "Navigating to dashboard" },
+      { patterns: [/show incidents/, /go to incidents/, /incident list/], action: () => navigate("/incidents"), feedback: "Showing incidents" },
+      { patterns: [/show workflows/, /go to workflows/, /workflow list/], action: () => navigate("/workflows"), feedback: "Showing workflows" },
+      { patterns: [/show decisions/, /go to decisions/], action: () => navigate("/decisions"), feedback: "Showing decisions" },
+      { patterns: [/show policies/, /go to policies/], action: () => navigate("/policies"), feedback: "Showing policies" },
+      { patterns: [/show action log/, /go to action log/, /action log/], action: () => navigate("/action-log"), feedback: "Showing action log" },
+      { patterns: [/run demo/, /start demo/, /fire drill/, /run scenario/], action: () => { runDemo(); }, feedback: "Running demo scenario" },
+      { patterns: [/stop listening/, /go to sleep/, /shut up/, /silence/], action: () => voiceCommands.toggleListening(), feedback: "Voice control deactivated" },
+    ],
+    getAiResponse,
+    (text: string, isFinal: boolean) => {
+      setLiveTranscript(text);
+      setTranscriptIsFinal(isFinal);
+      if (transcriptTimerRef.current) clearTimeout(transcriptTimerRef.current);
+      if (isFinal) {
+        transcriptTimerRef.current = setTimeout(() => setLiveTranscript(null), 5000);
+      }
+    },
+  );
 
   // --- Search ---
   const [searchQuery, setSearchQuery] = useState("");
@@ -363,6 +426,65 @@ export function Layout() {
             >
               {theme === "dark" ? <SunMedium className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
             </button>
+
+            <div className="relative">
+              <button
+                onClick={voiceCommands.toggleListening}
+                aria-label={voiceCommands.isListening ? "Deactivate voice control" : "Activate voice control"}
+                className="w-9 h-9 rounded-md flex items-center justify-center transition-all duration-200 hover:opacity-80"
+                style={{
+                  color: voiceCommands.isListening ? "var(--color-signal-red)" : "var(--color-muted)",
+                  border: `1px solid ${voiceCommands.isListening ? "var(--color-signal-red)" : "var(--color-hairline)"}`,
+                }}
+              >
+                <Mic className="w-4 h-4" />
+                {voiceCommands.isListening && (
+                  <motion.span
+                    className="absolute -top-1 -right-1 w-3 h-3 rounded-full"
+                    style={{ backgroundColor: "var(--color-signal-red)" }}
+                    animate={{ scale: [1, 1.4, 1] }}
+                    transition={{ repeat: Infinity, duration: 1.2, ease: "easeInOut" }}
+                  />
+                )}
+              </button>
+
+              <AnimatePresence>
+                {(liveTranscript || voiceCommands.lastAiResponse) && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 8 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: 8 }}
+                    className="absolute right-0 top-full mt-2 z-50 w-80 rounded-lg border shadow-lg overflow-hidden"
+                    style={{ backgroundColor: "var(--color-panel)", borderColor: "var(--color-hairline)" }}
+                  >
+                    {liveTranscript && (
+                      <div className="px-3 py-2.5 border-b" style={{ borderColor: "var(--color-hairline)" }}>
+                        <div className="flex items-center gap-2 mb-1">
+                          {!transcriptIsFinal && (
+                            <motion.span
+                              className="w-2 h-2 rounded-full shrink-0"
+                              style={{ backgroundColor: "var(--color-signal-red)" }}
+                              animate={{ opacity: [1, 0.3] }}
+                              transition={{ repeat: Infinity, duration: 0.8 }}
+                            />
+                          )}
+                          <span className="text-[11px] font-mono uppercase tracking-wider" style={{ color: "var(--color-dim)" }}>
+                            {transcriptIsFinal ? "You said" : "Listening"}
+                          </span>
+                        </div>
+                        <p className="text-sm font-mono" style={{ color: "var(--color-text)" }}>{liveTranscript}</p>
+                      </div>
+                    )}
+                    {voiceCommands.lastAiResponse && (
+                      <div className="px-3 py-2.5">
+                        <span className="text-[11px] font-mono uppercase tracking-wider block mb-1" style={{ color: "var(--color-signal-cyan)" }}>AI Response</span>
+                        <p className="text-sm" style={{ color: "var(--color-text)" }}>{voiceCommands.lastAiResponse}</p>
+                      </div>
+                    )}
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
 
             <div className="relative" ref={notifRef}>
               <button

@@ -1,18 +1,17 @@
 import { useEffect, useRef, useState } from "react";
 import { api, type WorkflowEvent } from "../../lib/incident-command/api";
+import type { LiveEvent } from "../../lib/incident-command/useLiveEvents";
 import { Brain, ChevronDown, ChevronRight, Loader2 } from "lucide-react";
 
 interface ThinkingTrace {
   agent: string;
   department: string;
   workflowState: string;
-  systemPrompt: string;
-  userPrompt: string;
-  tokens: string;
   output?: Record<string, unknown>;
   error?: string;
   startedAt: string;
   completedAt?: string;
+  streamedTokens?: string;
 }
 
 function buildTraces(events: WorkflowEvent[]): ThinkingTrace[] {
@@ -27,13 +26,11 @@ function buildTraces(events: WorkflowEvent[]): ThinkingTrace[] {
         agent: p.agent as string,
         department: p.department as string,
         workflowState: p.workflow_state as string,
-        systemPrompt: p.system_prompt as string,
-        userPrompt: p.user_prompt as string,
-        tokens: "",
         startedAt: ev.created_at,
+        streamedTokens: "",
       };
     } else if (ev.event_type === "AGENT_THINKING_TOKEN" && current) {
-      current.tokens = (current.tokens || "") + (p.token as string);
+      current.streamedTokens = (current.streamedTokens || "") + (p.token as string);
     } else if (ev.event_type === "AGENT_THINKING_COMPLETED" && current) {
       current.output = p.output as Record<string, unknown>;
       current.completedAt = ev.created_at;
@@ -49,8 +46,9 @@ function buildTraces(events: WorkflowEvent[]): ThinkingTrace[] {
   return traces;
 }
 
-export function AgentThinking({ workflowId, enabled }: { workflowId: string; enabled: boolean }) {
+export function AgentThinking({ workflowId, enabled, liveEvents }: { workflowId: string; enabled: boolean; liveEvents?: LiveEvent[] }) {
   const [events, setEvents] = useState<WorkflowEvent[]>([]);
+  const [liveTokens, setLiveTokens] = useState<Record<string, string>>({});
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
   const loadingRef = useRef(false);
 
@@ -70,6 +68,26 @@ export function AgentThinking({ workflowId, enabled }: { workflowId: string; ena
     const id = setInterval(load, 3000);
     return () => { cancelled = true; clearInterval(id); };
   }, [workflowId, enabled]);
+
+  // Process live events for streaming tokens for this workflow
+  useEffect(() => {
+    if (!liveEvents || liveEvents.length === 0) return;
+    for (const ev of liveEvents) {
+      if (ev.workflow_id !== workflowId) continue;
+      if (ev.event_type === "AGENT_THINKING_STARTED") {
+        const p = ev.payload;
+        const agent = p.agent as string;
+        if (agent) setLiveTokens(prev => ({ ...prev, [agent]: "" }));
+      } else if (ev.event_type === "AGENT_THINKING_TOKEN") {
+        const p = ev.payload;
+        const agent = p.agent as string;
+        const token = p.token as string;
+        if (agent && token) {
+          setLiveTokens(prev => ({ ...prev, [agent]: (prev[agent] || "") + token }));
+        }
+      }
+    }
+  }, [liveEvents, workflowId]);
 
   const traces = buildTraces(events);
   if (!enabled || traces.length === 0) return null;
@@ -107,23 +125,15 @@ export function AgentThinking({ workflowId, enabled }: { workflowId: string; ena
 
             {expanded.has(i) && (
               <div className="mt-3 space-y-3 pl-5">
-                <div>
-                  <label className="text-xs font-mono uppercase tracking-wider block mb-1" style={{ color: "var(--color-dim)" }}>System Prompt</label>
-                  <pre className="text-xs font-mono whitespace-pre-wrap rounded-md p-3 max-h-48 overflow-y-auto" style={{ backgroundColor: "var(--color-panel-raised)", color: "var(--color-muted)", border: "1px solid var(--color-hairline)" }}>{trace.systemPrompt}</pre>
-                </div>
-
-                <div>
-                  <label className="text-xs font-mono uppercase tracking-wider block mb-1" style={{ color: "var(--color-dim)" }}>User Prompt</label>
-                  <pre className="text-xs font-mono whitespace-pre-wrap rounded-md p-3 max-h-48 overflow-y-auto" style={{ backgroundColor: "var(--color-panel-raised)", color: "var(--color-muted)", border: "1px solid var(--color-hairline)" }}>{trace.userPrompt}</pre>
-                </div>
-
-                {trace.tokens && (
+                {(trace.streamedTokens || liveTokens[trace.agent]) && !trace.completedAt && !trace.error && (
                   <div>
-                    <label className="text-xs font-mono uppercase tracking-wider block mb-1" style={{ color: "var(--color-dim)" }}>Raw Response</label>
-                    <pre className="text-xs font-mono whitespace-pre-wrap rounded-md p-3 max-h-64 overflow-y-auto" style={{ backgroundColor: "var(--color-panel-raised)", color: "var(--color-text)", border: "1px solid var(--color-hairline)" }}>{trace.tokens}</pre>
+                    <label className="text-xs font-mono uppercase tracking-wider block mb-1" style={{ color: "var(--color-dim)" }}>Live Thinking</label>
+                    <pre className="text-xs font-mono whitespace-pre-wrap max-h-48 overflow-y-auto leading-relaxed rounded-md p-3" style={{ color: "var(--color-muted)", backgroundColor: "var(--color-surface)", border: "1px solid var(--color-hairline)" }}>
+                      {(liveTokens[trace.agent] || trace.streamedTokens || "") + " "}
+                      <span className="inline-block w-1.5 h-4 align-middle rounded-sm animate-pulse" style={{ backgroundColor: "var(--color-signal-cyan)" }} />
+                    </pre>
                   </div>
                 )}
-
                 {trace.output && (
                   <div>
                     <label className="text-xs font-mono uppercase tracking-wider block mb-1" style={{ color: "var(--color-dim)" }}>Structured Output</label>

@@ -190,6 +190,12 @@ export const api = {
   getWorkflowThinking: (workflowId: string, signal?: AbortSignal) =>
     req<PaginatedResponse<WorkflowEvent>>(`/api/workflows/${workflowId}/thinking`, { signal }),
 
+  aiQuery: (query: string, dbContext: Record<string, unknown>) =>
+    req<{ answer: string }>("/api/ai/query", {
+      method: "POST",
+      body: JSON.stringify({ query, db_context: dbContext }),
+    }),
+
   startSimulation: (count = 20, concurrency = 5, interval = 2.0) =>
     req<{ simulation_id: string; total: number; status: string }>(
       `/api/simulation/start${qs({ count, concurrency, interval })}`, { method: "POST" }

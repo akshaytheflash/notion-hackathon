@@ -1,15 +1,15 @@
 import { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { api, type WorkflowEvent } from "../../lib/incident-command/api";
-import { Brain, Cpu, DollarSign, Wrench, Sparkles, Loader2, ChevronDown, ChevronRight } from "lucide-react";
+import type { LiveEvent } from "../../lib/incident-command/useLiveEvents";
+import { Brain, Cpu, DollarSign, Wrench, Sparkles, Loader2 } from "lucide-react";
 
 interface AgentState {
   agent: string;
   department: string;
   status: "idle" | "thinking" | "done" | "failed";
-  prompt?: string;
   output?: Record<string, unknown>;
-  tokens?: string;
+  streamedTokens: string;
   workflowId?: string;
   updatedAt: number;
 }
@@ -28,12 +28,21 @@ function agentDepartment(name: string): string {
   return "";
 }
 
-export function AgentBrain() {
+export function AgentBrain({ liveEvents }: { liveEvents?: LiveEvent[] }) {
   const [agents, setAgents] = useState<Record<string, AgentState>>({});
   const [expanded, setExpanded] = useState<string | null>(null);
   const [recentEvents, setRecentEvents] = useState<WorkflowEvent[]>([]);
   const loadingRef = useRef(false);
+  const liveTokenRef = useRef<Record<string, string>>({});
+  const tokensEndRef = useRef<HTMLPreElement | null>(null);
 
+  useEffect(() => {
+    const el = tokensEndRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+  }, [agents]);
+
+  // Load past decisions from API
   useEffect(() => {
     let cancelled = false;
     async function load() {
@@ -50,6 +59,7 @@ export function AgentBrain() {
     return () => { cancelled = true; clearInterval(id); };
   }, []);
 
+  // Process past decisions into agent cards
   useEffect(() => {
     if (recentEvents.length === 0) return;
     setAgents(prev => {
@@ -59,16 +69,15 @@ export function AgentBrain() {
         const agentName = (p.agent as string) || ev.source;
         const meta = AGENT_META[agentName];
         if (!meta) continue;
-
         const existing = updated[agentName];
         if (existing && existing.updatedAt > new Date(ev.created_at).getTime()) continue;
-
         updated[agentName] = {
           agent: agentName,
           department: agentDepartment(agentName) || (p.department as string) || "",
           status: "done",
           output: p,
           workflowId: ev.workflow_id,
+          streamedTokens: "",
           updatedAt: Date.now(),
         };
       }
@@ -76,6 +85,7 @@ export function AgentBrain() {
     });
   }, [recentEvents]);
 
+  // Poll for historical thinking traces (for workflow detail / on page load)
   useEffect(() => {
     let cancelled = false;
     async function pollThinking() {
@@ -101,9 +111,8 @@ export function AgentBrain() {
                   status: ev.event_type === "AGENT_THINKING_STARTED" ? "thinking" :
                           ev.event_type === "AGENT_THINKING_COMPLETED" ? "done" :
                           ev.event_type === "AGENT_THINKING_FAILED" ? "failed" : prev[agentName]?.status || "idle",
-                  prompt: ev.event_type === "AGENT_THINKING_STARTED" ? (p.user_prompt as string) : prev[agentName]?.prompt,
                   output: ev.event_type === "AGENT_THINKING_COMPLETED" ? p.output as Record<string, unknown> : prev[agentName]?.output,
-                  tokens: ev.event_type === "AGENT_THINKING_TOKEN" ? (prev[agentName]?.tokens || "") + (p.token as string) : prev[agentName]?.tokens,
+                  streamedTokens: ev.event_type === "AGENT_THINKING_TOKEN" ? (prev[agentName]?.streamedTokens || "") + (p.token as string) : prev[agentName]?.streamedTokens || "",
                   workflowId: ev.workflow_id,
                   updatedAt: new Date(ev.created_at).getTime(),
                 },
@@ -117,6 +126,72 @@ export function AgentBrain() {
     const id = setInterval(pollThinking, 3000);
     return () => { cancelled = true; clearInterval(id); };
   }, []);
+
+  // LIVE streaming: process WebSocket events in real-time
+  useEffect(() => {
+    if (!liveEvents || liveEvents.length === 0) return;
+    for (const ev of liveEvents) {
+      if (!ev.event_type.startsWith("AGENT_THINKING_")) continue;
+      const p = ev.payload;
+      const agentName = (p.agent as string) || ev.source;
+      if (!agentName || !AGENT_META[agentName]) continue;
+
+      if (ev.event_type === "AGENT_THINKING_STARTED") {
+        liveTokenRef.current[agentName] = "";
+        setAgents(prev => ({
+          ...prev,
+          [agentName]: {
+            agent: agentName,
+            department: agentDepartment(agentName) || (p.department as string) || "",
+            status: "thinking",
+            workflowId: ev.workflow_id,
+            streamedTokens: "",
+            updatedAt: Date.now(),
+          },
+        }));
+      } else if (ev.event_type === "AGENT_THINKING_TOKEN") {
+        const token = p.token as string;
+        liveTokenRef.current[agentName] = (liveTokenRef.current[agentName] || "") + token;
+        setAgents(prev => {
+          const existing = prev[agentName];
+          if (!existing || existing.status !== "thinking") return prev;
+          return {
+            ...prev,
+            [agentName]: {
+              ...existing,
+              streamedTokens: liveTokenRef.current[agentName] || "",
+              updatedAt: Date.now(),
+            },
+          };
+        });
+      } else if (ev.event_type === "AGENT_THINKING_COMPLETED") {
+        setAgents(prev => ({
+          ...prev,
+          [agentName]: {
+            agent: agentName,
+            department: agentDepartment(agentName) || (p.department as string) || "",
+            status: "done",
+            output: p.output as Record<string, unknown>,
+            workflowId: ev.workflow_id,
+            streamedTokens: liveTokenRef.current[agentName] || "",
+            updatedAt: Date.now(),
+          },
+        }));
+      } else if (ev.event_type === "AGENT_THINKING_FAILED") {
+        setAgents(prev => ({
+          ...prev,
+          [agentName]: {
+            agent: agentName,
+            department: agentDepartment(agentName) || (p.department as string) || "",
+            status: "failed",
+            workflowId: ev.workflow_id,
+            streamedTokens: "",
+            updatedAt: Date.now(),
+          },
+        }));
+      }
+    }
+  }, [liveEvents]);
 
   const agentList = Object.values(agents).sort((a, b) => b.updatedAt - a.updatedAt);
   if (agentList.length === 0) return null;
@@ -196,17 +271,25 @@ export function AgentBrain() {
               )}
 
               <AnimatePresence>
-                {isExpanded && agent.prompt && (
+                {isExpanded && agent.streamedTokens && (
                   <motion.div
                     initial={{ height: 0, opacity: 0 }}
                     animate={{ height: "auto", opacity: 1 }}
                     exit={{ height: 0, opacity: 0 }}
                     className="mt-3 overflow-hidden"
                   >
-                    <div className="rounded-md p-3 space-y-2" style={{ backgroundColor: "var(--color-surface)", border: "1px solid var(--color-hairline)" }}>
-                      <label className="text-[10px] font-mono uppercase tracking-wider" style={{ color: "var(--color-dim)" }}>Prompt</label>
-                      <pre className="text-xs font-mono whitespace-pre-wrap max-h-32 overflow-y-auto" style={{ color: "var(--color-muted)" }}>
-                        {agent.prompt}
+                    <div className="rounded-md p-3" style={{ backgroundColor: "var(--color-surface)", border: "1px solid var(--color-hairline)" }}>
+                      <label className="text-[10px] font-mono uppercase tracking-wider mb-1.5 block" style={{ color: "var(--color-dim)" }}>Thinking trace</label>
+                      <pre ref={tokensEndRef} className="text-xs font-mono whitespace-pre-wrap max-h-48 overflow-y-auto leading-relaxed" style={{ color: "var(--color-muted)" }}>
+                        {agent.streamedTokens}
+                        {agent.status === "thinking" && (
+                          <motion.span
+                            className="inline-block w-1.5 h-4 ml-0.5 align-middle rounded-sm"
+                            style={{ backgroundColor: meta.color }}
+                            animate={{ opacity: [1, 0] }}
+                            transition={{ repeat: Infinity, duration: 0.8, ease: "easeInOut" }}
+                          />
+                        )}
                       </pre>
                     </div>
                   </motion.div>

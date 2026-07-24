@@ -5,6 +5,7 @@ import { stateColor, eventColor } from "../lib/incident-command/workflow-status"
 import { WorkflowTimeline } from "../components/incident-command/WorkflowTimeline";
 import { SkeletonDetail } from "../components/incident-command/Skeleton";
 import { AgentThinking } from "../components/incident-command/AgentThinking";
+import { useLiveEvents } from "../lib/incident-command/useLiveEvents";
 import { Loader2, RefreshCw } from "lucide-react";
 
 const RETRYABLE_STATES = new Set(["WAITING_FOR_APPROVAL", "COMPLETED"]);
@@ -17,6 +18,7 @@ export default function WorkflowDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [retrying, setRetrying] = useState(false);
   const [retryResult, setRetryResult] = useState<string | null>(null);
+  const { events: liveEvents } = useLiveEvents();
 
   const load = useCallback(async (signal?: AbortSignal) => {
     if (!workflowId) return;
@@ -156,7 +158,7 @@ export default function WorkflowDetailPage() {
         </div>
       </div>
 
-      <AgentThinking workflowId={workflow.id} enabled={true} />
+      <AgentThinking workflowId={workflow.id} enabled={true} liveEvents={liveEvents} />
     </div>
   );
 }

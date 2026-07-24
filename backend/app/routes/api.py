@@ -12,6 +12,7 @@ from app.config import settings
 from app.core.orchestrator import Orchestrator
 from app.core.simulation_runner import SimulationRunner
 from app.adapters.notion import NotionAdapter
+from app.adapters.gemini import GeminiAdapter
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -785,6 +786,28 @@ async def webhook_receiver(payload: dict):
     await orchestrator._emit_event(event_type, workflow_id, source, payload.get("data", payload))
     logger.info(f"Webhook received: {event_type} from {source}")
     return {"status": "ok", "event_type": event_type}
+
+
+@router.post("/api/ai/query")
+async def ai_query(body: dict):
+    query = body.get("query", "")
+    db_context = body.get("db_context", {})
+    if not query:
+        return {"answer": "Please provide a query."}
+    gemini = GeminiAdapter()
+    system_prompt = (
+        "You are an AI assistant for the Enterprise AI OS Command Center. "
+        "Given the current database state (workflows, incidents, decisions, policies, approvals, analytics), "
+        "answer the user's question concisely and accurately. "
+        "Use the JSON data provided to give specific, factual answers. "
+        "If the data doesn't contain the answer, say so. "
+        "Keep responses under 3 sentences for speech synthesis."
+    )
+    user_prompt = f"Database State:\n{json.dumps(db_context, indent=2)}\n\nUser Query: {query}"
+    result = await gemini.generate_structured(system_prompt, user_prompt)
+    if result is None:
+        return {"answer": "I'm sorry, I couldn't process that query. The AI service may be unavailable."}
+    return {"answer": result.get("text", "")}
 
 
 @router.websocket("/ws/workflows/{workflow_id}")
