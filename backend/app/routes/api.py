@@ -13,12 +13,14 @@ from app.core.orchestrator import Orchestrator
 from app.core.simulation_runner import SimulationRunner
 from app.adapters.notion import NotionAdapter
 from app.adapters.gemini import GeminiAdapter
+from app.core.auto_fixer import AutoFixer
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 orchestrator = Orchestrator()
 simulation_runner = SimulationRunner(orchestrator)
 notion = NotionAdapter()
+auto_fixer = AutoFixer()
 
 
 @router.get("/health")
@@ -833,6 +835,19 @@ async def delete_recipient(recipient_id: str):
     return {"status": "deleted"}
 
 
+@router.post("/api/auto-fix")
+async def auto_fix(body: dict):
+    issue = body.get("issue", "")
+    file_path = body.get("file_path", "")
+    trace_id = body.get("trace_id")
+    if not issue:
+        return {"error": "Please provide an 'issue' describing the problem."}
+    if not file_path:
+        return {"error": "Please provide a 'file_path' to the file that needs fixing."}
+    result = await auto_fixer.run_auto_fix(issue, file_path, trace_id)
+    return result
+
+
 @router.post("/api/ai/query")
 async def ai_query(body: dict):
     query = body.get("query", "")
@@ -872,6 +887,7 @@ async def workflow_ws(websocket: WebSocket, workflow_id: str):
             pass
 
     orchestrator.on_event(send_event)
+    orchestrator.auto_fixer.on_event(send_event)
     try:
         while True:
             await websocket.receive_text()

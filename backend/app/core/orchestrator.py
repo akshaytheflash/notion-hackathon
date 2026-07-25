@@ -21,6 +21,7 @@ from app.adapters.github import GitHubAdapter
 from app.adapters.slack import SlackAdapter
 from app.adapters.pagerduty import PagerDutyAdapter
 from app.adapters.email import EmailAdapter
+from app.core.auto_fixer import AutoFixer
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +36,7 @@ class Orchestrator:
         self.slack = SlackAdapter()
         self.pagerduty = PagerDutyAdapter()
         self.email = EmailAdapter()
+        self.auto_fixer = AutoFixer()
         self._event_listeners: list = []
 
     def on_event(self, listener) -> None:
@@ -154,6 +156,34 @@ class Orchestrator:
             await self.notion.record_decision(str(uuid.uuid4()), workflow_id, context.get("incident_id", ""),
                                                 eng_output.agent, eng_output.department, eng_output.decision,
                                                 eng_output.reasoning_summary, eng_output.evidence, eng_output.confidence)
+
+            is_code_fix = (
+                eng_output.decision == "CODE_FIX"
+                and eng_output.requested_action == "AUTO_FIX"
+                and eng_output.evidence
+                and eng_output.confidence >= 0.5
+            )
+            if is_code_fix:
+                file_path = context.get("file_path", context.get("description", "")).lower()
+                import re
+                py_files = re.findall(r'[\w-]+\.py', file_path)
+                target_file = py_files[0] if py_files else "test.py"
+                logger.info(f"Engineering detected code fix for {target_file}. Routing to auto-fixer.")
+                await self._emit_event("ROUTING_TO_AUTOFIX", workflow_id, "orchestrator", {
+                    "file_path": target_file,
+                    "incident": context.get("description", ""),
+                })
+                fix_result = await self.auto_fixer.run_auto_fix(
+                    issue_description=context.get("description", "Code fix needed"),
+                    file_path=target_file,
+                    trace_id=workflow_id,
+                )
+                await self._emit_event("AUTOFIX_WORKFLOW_RESULT", workflow_id, "orchestrator", fix_result)
+                if fix_result.get("status") in ("FIXED_AND_MERGED", "ALREADY_FIXED"):
+                    await self._transition(session, workflow, "COMPLETED")
+                else:
+                    await self._transition(session, workflow, "FAILED")
+                return {"workflow_id": workflow_id, "status": fix_result.get("status", "FAILED"), "auto_fix_result": fix_result}
 
             await self._transition(session, workflow, "RESOURCE_REQUESTED")
             await asyncio.sleep(5)

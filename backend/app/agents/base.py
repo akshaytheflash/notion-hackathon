@@ -58,7 +58,14 @@ class BaseAgent:
         elif workflow_state == "ENGINEERING_APPEAL":
             ctx += "\nThe finance department has rejected your resource request because it exceeds policy limits. Provide a strong cost-benefit justification for why this exception should be approved despite exceeding the standard limit.\n"
         elif workflow_state == "ENGINEERING_ANALYSIS":
-            ctx += "\nAssess the incident and determine what resources are needed. You will need to request resources to address this incident.\n"
+            ctx += "\nAssess the incident. Determine if this is a simple code-level fix (like a syntax error in a file) or a standard infrastructure incident.\n"
+            ctx += "\nIf this is a SIMPLE CODE FIX (syntax error, typo, missing import, etc.):\n"
+            ctx += "- Set decision to 'CODE_FIX'\n"
+            ctx += "- Set requested_action to 'AUTO_FIX'\n"
+            ctx += "- Set requested_amount to 0\n"
+            ctx += "- Put the ENTIRE corrected file content in the evidence field\n"
+            ctx += "- Set confidence to at least 0.5 if you are confident in the fix\n"
+            ctx += "\nOtherwise, follow the standard process:\n"
             ctx += "Set requested_amount to the actual dollar cost needed to resolve this incident. Be realistic:\n"
             ctx += "- For critical P0 outages requiring infrastructure scaling or emergency vendor contracts: $60,000-$120,000\n"
             ctx += "- For P1 incidents requiring moderate engineering effort or third-party tools: $20,000-$60,000\n"
