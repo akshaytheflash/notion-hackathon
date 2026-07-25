@@ -84,7 +84,7 @@ class AutoFixer:
                 }
 
             can_fix = (
-                agent_output.decision.upper() == "CAN_FIX"
+                agent_output.decision.upper() in ("CAN_FIX", "CODE_FIX")
                 and agent_output.confidence >= 0.5
                 and agent_output.evidence
             )
