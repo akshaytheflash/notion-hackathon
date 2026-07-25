@@ -54,21 +54,30 @@ class AutoFixer:
         })
 
         try:
+            await self._emit_event("AUTOFIX_ANALYZING", trace_id, "auto_fixer", {
+                "issue": issue_description,
+                "file": file_path,
+            })
+
+            existing_file = await self.github.get_file_content(file_path)
+            if existing_file is None:
+                raise AutoFixError(f"File '{file_path}' not found in repository")
+
+            original_content = existing_file["content"]
+            file_sha = existing_file["sha"]
+
             incident_context = {
                 "name": "Auto-Fix Incident",
                 "severity": "P3",
                 "description": issue_description,
                 "revenue_risk_per_day": 0,
                 "file_path": file_path,
+                "original_content": original_content,
             }
-
-            await self._emit_event("AUTOFIX_ANALYZING", trace_id, "auto_fixer", {
-                "issue": issue_description,
-                "file": file_path,
-            })
 
             agent_output = await self.agent.think(
                 incident_context, "ENGINEERING_ANALYSIS",
+                original_file_content=original_content,
                 trace_id=trace_id, emit_event=self._emit_event,
             )
 
@@ -105,34 +114,6 @@ class AutoFixer:
                 }
 
             corrected_content = agent_output.evidence
-            logger.info(f"Auto-fix identified fix for '{file_path}'. Attempting to apply...")
-
-            await self._emit_event("AUTOFIX_SIMPLE", trace_id, "auto_fixer", {
-                "file_path": file_path,
-                "fix_description": agent_output.reasoning_summary,
-            })
-
-            return await self._apply_fix(file_path, corrected_content, trace_id, agent_output)
-
-        except AutoFixError as e:
-            logger.error(f"Auto-fix error for {file_path}: {e}")
-            await self._emit_event("AUTOFIX_FAILED", trace_id, "auto_fixer", {"error": str(e)})
-            return {"trace_id": trace_id, "status": "FAILED", "error": str(e)}
-        except Exception as e:
-            logger.exception(f"Unexpected auto-fix error for {file_path}: {e}")
-            await self._emit_event("AUTOFIX_FAILED", trace_id, "auto_fixer", {"error": f"Unexpected error: {e}"})
-            return {"trace_id": trace_id, "status": "FAILED", "error": f"An unexpected error occurred: {e}"}
-
-    async def _apply_fix(self, file_path: str, corrected_content: str, trace_id: str, agent_output: AgentOutput) -> dict:
-        branch_name = f"autofix/{file_path.replace('/', '-').replace('.py', '')}-{uuid.uuid4().hex[:8]}"
-
-        try:
-            existing_file = await self.github.get_file_content(file_path)
-            if existing_file is None:
-                raise AutoFixError(f"File '{file_path}' not found in repository")
-
-            original_content = existing_file["content"]
-            file_sha = existing_file["sha"]
 
             if original_content == corrected_content:
                 await self._emit_event("AUTOFIX_COMPLEX", trace_id, "auto_fixer", {
@@ -144,6 +125,28 @@ class AutoFixer:
                     "message": "File content is already correct, no changes needed.",
                 }
 
+            logger.info(f"Auto-fix identified fix for '{file_path}'. Applying...")
+
+            await self._emit_event("AUTOFIX_SIMPLE", trace_id, "auto_fixer", {
+                "file_path": file_path,
+                "fix_description": agent_output.reasoning_summary,
+            })
+
+            return await self._apply_fix(file_path, corrected_content, file_sha, trace_id, agent_output)
+
+        except AutoFixError as e:
+            logger.error(f"Auto-fix error for {file_path}: {e}")
+            await self._emit_event("AUTOFIX_FAILED", trace_id, "auto_fixer", {"error": str(e)})
+            return {"trace_id": trace_id, "status": "FAILED", "error": str(e)}
+        except Exception as e:
+            logger.exception(f"Unexpected auto-fix error for {file_path}: {e}")
+            await self._emit_event("AUTOFIX_FAILED", trace_id, "auto_fixer", {"error": f"Unexpected error: {e}"})
+            return {"trace_id": trace_id, "status": "FAILED", "error": f"An unexpected error occurred: {e}"}
+
+    async def _apply_fix(self, file_path: str, corrected_content: str, file_sha: str, trace_id: str, agent_output: AgentOutput) -> dict:
+        branch_name = f"autofix/{file_path.replace('/', '-').replace('.py', '')}-{uuid.uuid4().hex[:8]}"
+
+        try:
             base_sha = await self.github.get_default_branch_sha()
             if not base_sha:
                 raise AutoFixError("Could not determine base branch SHA")
@@ -177,6 +180,7 @@ class AutoFixer:
             pr_body = (
                 f"## Automated Fix\n\n"
                 f"**File:** `{file_path}`\n\n"
+                f"**Original:**\n```python\n{_get_original_preview(file_path, corrected_content)}\n```\n\n"
                 f"**Issue:** {agent_output.reasoning_summary}\n\n"
                 f"**Confidence:** {agent_output.confidence:.2f}\n\n"
                 f"---\n"
@@ -230,3 +234,8 @@ class AutoFixer:
             raise
         except Exception as e:
             raise AutoFixError(f"Failed to apply fix: {e}")
+
+
+def _get_original_preview(file_path: str, corrected: str) -> str:
+    lines = corrected.split("\n")
+    return "\n".join(lines[:10]) + ("..." if len(lines) > 10 else "")
