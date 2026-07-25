@@ -179,10 +179,18 @@ class Orchestrator:
                     trace_id=workflow_id,
                 )
                 await self._emit_event("AUTOFIX_WORKFLOW_RESULT", workflow_id, "orchestrator", fix_result)
-                if fix_result.get("status") in ("FIXED_AND_MERGED", "ALREADY_FIXED"):
-                    await self._transition(session, workflow, "COMPLETED")
-                else:
-                    await self._transition(session, workflow, "FAILED")
+                try:
+                    if fix_result.get("status") in ("FIXED_AND_MERGED", "ALREADY_FIXED"):
+                        await self._transition(session, workflow, "COMPLETED")
+                    else:
+                        await self._transition(session, workflow, "FAILED")
+                except Exception as tx_e:
+                    logger.error(f"Auto-fix state transition failed for {workflow_id}: {tx_e}")
+                    workflow.state = "FAILED"
+                    workflow.updated_at = datetime.now(timezone.utc)
+                    workflow.completed_at = datetime.now(timezone.utc)
+                    session.add(workflow)
+                    await session.commit()
                 return {"workflow_id": workflow_id, "status": fix_result.get("status", "FAILED"), "auto_fix_result": fix_result}
 
             await self._transition(session, workflow, "RESOURCE_REQUESTED")
